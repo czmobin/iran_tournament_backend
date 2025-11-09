@@ -4,7 +4,7 @@ from django.urls import reverse
 from django.contrib import messages
 from django.db.models import Q
 from django.utils import timezone
-from .models import Match, Game, MatchDispute, MatchChat
+from .models import Match, Game, MatchChat
 
 
 class GameInline(admin.TabularInline):
@@ -14,7 +14,7 @@ class GameInline(admin.TabularInline):
     
     fields = (
         'game_number', 'winner', 'player1_crowns',
-        'player2_crowns', 'is_verified', 'screenshot'
+        'player2_crowns', 'is_verified'
     )
     readonly_fields = ('game_number', 'winner', 'played_at')
     
@@ -312,8 +312,7 @@ class GameAdmin(admin.ModelAdmin):
     
     list_display = (
         'game_info', 'match_link', 'winner_link',
-        'score_display', 'verified_badge',
-        'screenshot_preview', 'played_at'
+        'score_display', 'verified_badge', 'played_at'
     )
     
     list_filter = (
@@ -331,8 +330,7 @@ class GameAdmin(admin.ModelAdmin):
         'player1_crowns', 'player2_crowns',
         'player1_towers_destroyed', 'player2_towers_destroyed',
         'duration_seconds', 'played_at',
-        'submitted_by', 'verified_at',
-        'screenshot_full'
+        'submitted_by', 'verified_at'
     )
     
     autocomplete_fields = ['verified_by']
@@ -346,9 +344,6 @@ class GameAdmin(admin.ModelAdmin):
                 'winner', 'player1_crowns', 'player2_crowns',
                 'player1_towers_destroyed', 'player2_towers_destroyed'
             )
-        }),
-        ('مدرک', {
-            'fields': ('screenshot', 'screenshot_full')
         }),
         ('زمان', {
             'fields': ('duration_seconds', 'played_at')
@@ -416,29 +411,7 @@ class GameAdmin(admin.ModelAdmin):
         return format_html('<span style="color: red;">✗ تایید نشده</span>')
     verified_badge.short_description = 'تایید'
     verified_badge.admin_order_field = 'is_verified'
-    
-    def screenshot_preview(self, obj):
-        if obj.screenshot:
-            return format_html(
-                '<a href="{}" target="_blank">'
-                '<img src="{}" width="50" height="50" style="border-radius: 5px;"/>'
-                '</a>',
-                obj.screenshot.url, obj.screenshot.url
-            )
-        return '—'
-    screenshot_preview.short_description = 'اسکرین‌شات'
-    
-    def screenshot_full(self, obj):
-        if obj.screenshot:
-            return format_html(
-                '<a href="{}" target="_blank">'
-                '<img src="{}" width="400" style="border-radius: 5px;"/>'
-                '</a>',
-                obj.screenshot.url, obj.screenshot.url
-            )
-        return '—'
-    screenshot_full.short_description = 'اسکرین‌شات کامل'
-    
+
     def verify_games(self, request, queryset):
         """Verify selected games"""
         updated = 0
@@ -467,222 +440,7 @@ class GameAdmin(admin.ModelAdmin):
         return False
 
 
-@admin.register(MatchDispute)
-class MatchDisputeAdmin(admin.ModelAdmin):
-    """Match dispute admin"""
-    
-    list_display = (
-        'id', 'match_link', 'reporter_link',
-        'dispute_type_badge', 'status_badge',
-        'created_at'
-    )
-    
-    list_filter = (
-        'status', 'dispute_type', 'priority',
-        'created_at'
-    )
-    
-    search_fields = (
-        'match__match_number', 'match__tournament__title',
-        'reporter__username', 'reason'
-    )
-    
-    readonly_fields = (
-        'match', 'game', 'reporter',
-        'created_at', 'resolved_at',
-        'evidence_preview'
-    )
-    
-    autocomplete_fields = ['resolved_by']
-    
-    fieldsets = (
-        ('اطلاعات اعتراض', {
-            'fields': (
-                'match', 'game', 'reporter',
-                'dispute_type', 'priority'
-            )
-        }),
-        ('جزئیات', {
-            'fields': ('reason', 'evidence', 'evidence_preview', 'additional_evidence')
-        }),
-        ('وضعیت', {
-            'fields': ('status',)
-        }),
-        ('پاسخ ادمین', {
-            'fields': (
-                'admin_response', 'resolution_action',
-                'resolved_by', 'resolved_at'
-            ),
-            'classes': ('collapse',)
-        }),
-        ('تاریخ', {
-            'fields': ('created_at',),
-            'classes': ('collapse',)
-        })
-    )
-    
-    actions = [
-        'start_review', 'resolve_disputes',
-        'reject_disputes', 'set_high_priority'
-    ]
-    
-    def match_link(self, obj):
-        url = reverse('admin:matches_match_change', args=[obj.match.id])
-        return format_html(
-            '<a href="{}">مسابقه #{}</a><br>'
-            '<small>{}</small>',
-            url, obj.match.match_number,
-            obj.match.tournament.title
-        )
-    match_link.short_description = 'مسابقه'
-    
-    def reporter_link(self, obj):
-        url = reverse('admin:accounts_user_change', args=[obj.reporter.id])
-        return format_html('<a href="{}">{}</a>', url, obj.reporter.username)
-    reporter_link.short_description = 'گزارش‌دهنده'
-    
-    def dispute_type_badge(self, obj):
-        colors = {
-            'wrong_result': 'orange',
-            'cheating': 'red',
-            'disconnect': 'blue',
-            'no_show': 'purple',
-            'technical': 'gray',
-            'other': 'lightgray'
-        }
-        color = colors.get(obj.dispute_type, 'gray')
-        return format_html(
-            '<span style="background-color: {}; color: white; '
-            'padding: 2px 8px; border-radius: 3px; font-size: 11px;">{}</span>',
-            color, obj.get_dispute_type_display()
-        )
-    dispute_type_badge.short_description = 'نوع'
-    
-    def status_badge(self, obj):
-        colors = {
-            'open': 'orange',
-            'under_review': 'blue',
-            'resolved': 'green',
-            'rejected': 'red'
-        }
-        color = colors.get(obj.status, 'gray')
-        return format_html(
-            '<span style="background-color: {}; color: white; '
-            'padding: 3px 10px; border-radius: 3px;">{}</span>',
-            color, obj.get_status_display()
-        )
-    status_badge.short_description = 'وضعیت'
-    status_badge.admin_order_field = 'status'
-        
-    def evidence_preview(self, obj):
-        if obj.evidence:
-            return format_html(
-                '<a href="{}" target="_blank">'
-                '<img src="{}" width="300" style="border-radius: 5px;"/>'
-                '</a>',
-                obj.evidence.url, obj.evidence.url
-            )
-        return '—'
-    evidence_preview.short_description = 'مدرک'
-    
-    def start_review(self, request, queryset):
-        """Start reviewing disputes"""
-        updated = 0
-        for dispute in queryset.filter(status='open'):
-            try:
-                dispute.start_review(request.user)
-                updated += 1
-            except:
-                pass
-        
-        self.message_user(request, f'بررسی {updated} اعتراض شروع شد.')
-    start_review.short_description = 'شروع بررسی'
-    
-    def resolve_disputes(self, request, queryset):
-        """Resolve disputes"""
-        from django import forms
-        from django.shortcuts import render, redirect
-        
-        class ResolveForm(forms.Form):
-            response = forms.CharField(
-                label='پاسخ',
-                widget=forms.Textarea,
-                required=True
-            )
-            action = forms.CharField(
-                label='اقدام انجام شده',
-                max_length=200,
-                required=False
-            )
-        
-        if 'apply' in request.POST:
-            form = ResolveForm(request.POST)
-            if form.is_valid():
-                response = form.cleaned_data['response']
-                action = form.cleaned_data['action']
-                success = 0
-                
-                for dispute in queryset.filter(status__in=['open', 'under_review']):
-                    try:
-                        dispute.resolve(request.user, response, action)
-                        success += 1
-                    except:
-                        pass
-                
-                self.message_user(request, f'{success} اعتراض حل شد.')
-                return redirect('..')
-        else:
-            form = ResolveForm()
-        
-        return render(
-            request,
-            'admin/resolve_dispute_form.html',
-            {'form': form, 'disputes': queryset}
-        )
-    resolve_disputes.short_description = 'حل اعتراضات'
-    
-    def reject_disputes(self, request, queryset):
-        """Reject disputes"""
-        from django import forms
-        from django.shortcuts import render, redirect
-        
-        class RejectForm(forms.Form):
-            response = forms.CharField(
-                label='دلیل رد',
-                widget=forms.Textarea,
-                required=True
-            )
-        
-        if 'apply' in request.POST:
-            form = RejectForm(request.POST)
-            if form.is_valid():
-                response = form.cleaned_data['response']
-                success = 0
-                
-                for dispute in queryset.filter(status__in=['open', 'under_review']):
-                    try:
-                        dispute.reject(request.user, response)
-                        success += 1
-                    except:
-                        pass
-                
-                self.message_user(request, f'{success} اعتراض رد شد.')
-                return redirect('..')
-        else:
-            form = RejectForm()
-        
-        return render(
-            request,
-            'admin/reject_dispute_form.html',
-            {'form': form, 'disputes': queryset}
-        )
-    reject_disputes.short_description = 'رد اعتراضات'
-    
-    def set_high_priority(self, request, queryset):
-        """Set disputes to high priority"""
-        updated = queryset.update(priority=5)
-        self.message_user(request, f'{updated} اعتراض به اولویت بالا تغییر کرد.')
-    set_high_priority.short_description = 'اولویت بالا'
+# MatchDispute admin removed - dispute system removed from models
 
 
 @admin.register(MatchChat)
