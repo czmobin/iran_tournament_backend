@@ -7,12 +7,11 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 
-from .models import Match, Game, MatchDispute, MatchChat
+from .models import Match, Game, MatchChat
 from .serializers import (
     MatchSerializer, MatchListSerializer, MatchCreateSerializer,
     MatchUpdateSerializer, SubmitMatchResultSerializer,
     GameSerializer, GameCreateSerializer,
-    MatchDisputeSerializer, MatchDisputeCreateSerializer, MatchDisputeResolveSerializer,
     MatchChatSerializer, MatchChatCreateSerializer
 )
 
@@ -257,102 +256,6 @@ class GameViewSet(viewsets.ModelViewSet):
         else:
             return Response(
                 {'error': 'بازی قبلاً تایید شده است'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-
-class MatchDisputeViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing match disputes"""
-
-    queryset = MatchDispute.objects.select_related(
-        'match', 'game', 'reporter', 'resolved_by'
-    )
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, OrderingFilter]
-    filterset_fields = ['match', 'status', 'dispute_type', 'priority']
-    ordering_fields = ['priority', 'created_at']
-    ordering = ['-priority', '-created_at']
-
-    def get_serializer_class(self):
-        """Return appropriate serializer class"""
-        if self.action == 'create':
-            return MatchDisputeCreateSerializer
-        return MatchDisputeSerializer
-
-    def get_queryset(self):
-        """Filter queryset based on user"""
-        user = self.request.user
-        queryset = super().get_queryset()
-
-        # Admins see all disputes
-        if user.is_staff:
-            return queryset
-
-        # Users see only their disputes
-        return queryset.filter(reporter=user)
-
-    def perform_create(self, serializer):
-        """Create a new dispute"""
-        # Set reporter to current user
-        serializer.save(reporter=self.request.user)
-
-    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
-    def start_review(self, request, pk=None):
-        """Start reviewing a dispute (admin only)"""
-        dispute = self.get_object()
-
-        if dispute.start_review(request.user):
-            return Response({
-                'message': 'بررسی اعتراض شروع شد',
-                'dispute': MatchDisputeSerializer(dispute).data
-            })
-        else:
-            return Response(
-                {'error': 'اعتراض در حالت مناسب برای شروع بررسی نیست'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
-    def resolve(self, request, pk=None):
-        """Resolve a dispute (admin only)"""
-        dispute = self.get_object()
-        serializer = MatchDisputeResolveSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        response = serializer.validated_data['response']
-        action_taken = serializer.validated_data.get('action', '')
-
-        if dispute.resolve(request.user, response, action_taken):
-            return Response({
-                'message': 'اعتراض حل شد',
-                'dispute': MatchDisputeSerializer(dispute).data
-            })
-        else:
-            return Response(
-                {'error': 'اعتراض در حالت مناسب برای حل نیست'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
-    def reject(self, request, pk=None):
-        """Reject a dispute (admin only)"""
-        dispute = self.get_object()
-        response = request.data.get('response', '')
-
-        if not response:
-            return Response(
-                {'error': 'پاسخ الزامی است'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        if dispute.reject(request.user, response):
-            return Response({
-                'message': 'اعتراض رد شد',
-                'dispute': MatchDisputeSerializer(dispute).data
-            })
-        else:
-            return Response(
-                {'error': 'اعتراض در حالت مناسب برای رد نیست'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 

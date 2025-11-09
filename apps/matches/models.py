@@ -334,10 +334,6 @@ class Game(models.Model):
         return True
 
 
-# MatchDispute model removed - dispute system was too complex
-# If disputes are needed in future, handle via admin panel manually
-
-
 class MatchChat(models.Model):
     """Chat messages between match players"""
     

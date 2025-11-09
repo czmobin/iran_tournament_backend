@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Match, Game, MatchDispute, MatchChat
+from .models import Match, Game, MatchChat
 from apps.accounts.serializers import UserBasicSerializer
 
 User = get_user_model()
@@ -182,67 +182,6 @@ class SubmitMatchResultSerializer(serializers.Serializer):
 
         return data
 
-
-class MatchDisputeSerializer(serializers.ModelSerializer):
-    """Serializer for MatchDispute model"""
-
-    reporter_username = serializers.CharField(source='reporter.username', read_only=True)
-    resolved_by_username = serializers.CharField(source='resolved_by.username', read_only=True)
-    match_info = MatchListSerializer(source='match', read_only=True)
-
-    class Meta:
-        model = MatchDispute
-        fields = [
-            'id', 'match', 'match_info', 'game', 'reporter', 'reporter_username',
-            'dispute_type', 'reason', 'evidence', 'additional_evidence',
-            'status', 'admin_response', 'resolution_action',
-            'resolved_by', 'resolved_by_username', 'priority',
-            'created_at', 'resolved_at'
-        ]
-        read_only_fields = [
-            'id', 'status', 'admin_response', 'resolution_action',
-            'resolved_by', 'resolved_at', 'created_at'
-        ]
-
-    def validate(self, data):
-        """Validate dispute"""
-        match = data.get('match')
-        reporter = data.get('reporter')
-        game = data.get('game')
-
-        # Reporter must be one of the match players
-        if match and reporter and reporter not in [match.player1, match.player2]:
-            raise serializers.ValidationError('فقط بازیکنان مسابقه می‌توانند اعتراض کنند')
-
-        # If game is specified, it must belong to the match
-        if game and match and game.match != match:
-            raise serializers.ValidationError('بازی انتخاب شده متعلق به این مسابقه نیست')
-
-        return data
-
-
-class MatchDisputeCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating a dispute"""
-
-    class Meta:
-        model = MatchDispute
-        fields = [
-            'match', 'game', 'dispute_type', 'reason',
-            'evidence', 'additional_evidence', 'priority'
-        ]
-
-
-class MatchDisputeResolveSerializer(serializers.Serializer):
-    """Serializer for resolving a dispute"""
-
-    response = serializers.CharField()
-    action = serializers.CharField(required=False, allow_blank=True)
-
-    def validate(self, data):
-        """Validate dispute resolution"""
-        if not data.get('response'):
-            raise serializers.ValidationError('پاسخ الزامی است')
-        return data
 
 
 class MatchChatSerializer(serializers.ModelSerializer):

@@ -439,10 +439,6 @@ class GameAdmin(admin.ModelAdmin):
         """Prevent manual game creation"""
         return False
 
-
-# MatchDispute admin removed - dispute system removed from models
-
-
 @admin.register(MatchChat)
 class MatchChatAdmin(admin.ModelAdmin):
     """Match chat admin"""
