@@ -1,0 +1,526 @@
+from django.db import models
+from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.exceptions import ValidationError
+from django.utils import timezone
+from django.db import transaction
+from apps.accounts.models import User
+from decimal import Decimal
+from ckeditor.fields import RichTextField
+
+
+class Tournament(models.Model):
+    """Main tournament model"""
+    
+    STATUS_CHOICES = [
+        ('draft', 'پیش‌نویس'),
+        ('pending', 'در انتظار'),
+        ('registration', 'ثبت‌نام'),
+        ('ready', 'آماده شروع'),
+        ('ongoing', 'در حال برگزاری'),
+        ('finished', 'پایان یافته'),
+        ('cancelled', 'لغو شده'),
+    ]
+
+    TIME_DURATION_CHOICES = [
+        ('30m', '30m'),
+        ('1h', '1h'),
+        ('2h', '2h'),
+        ('3h', '3h'),
+        ('4h', '4h'),
+    ]
+
+    GAME_MODE_CHOICES = [
+        ('normal', 'normal'),
+        ('double_elixir_battle', 'double elixir battle'),
+        ('triple_elixir_battle', 'triple elixir battle'),
+        ('sudden_death_battle', 'sudden death battle'),
+        ('double_elixir_draft', 'double elixir draft'),
+        ('triple_draft', 'triple draft'),
+        ('heist_draft', 'heist draft'),
+        ('hog_race', 'hog race'),
+        ('lumberjack_rash', 'lumberjack rash'),
+        ('wall_breaker_party', 'wall breaker party'),
+        ('ghost_parade', 'ghost parade'),
+        ('elixir_capture', 'elixir capture'),
+        ('dragon_hunt', 'dragon hunt'),
+        ('duel', 'duel'),
+        ('mega_draft_challenge', 'mega draft challenge'),
+    ]
+    
+    PRICABLE_CHOICES = [
+        ('free', 'رایگان'),
+        ('premium', 'پرمیوم'),
+    ]
+    
+    title = models.CharField('عنوان', max_length=200)
+    slug = models.SlugField('اسلاگ', max_length=250, unique=True)
+    description = RichTextField(verbose_name="توضیحات")
+
+    banner = models.ImageField(
+        'بنر',
+        upload_to='tournament_banners/%Y/%m/',
+        null=True,
+        blank=True
+    )
+    
+    # Tournament settings
+    game_mode = models.CharField(
+        'حالت بازی',
+        max_length=30,
+        choices=GAME_MODE_CHOICES,
+        default='normal'
+    )
+    pricable = models.CharField(
+        'رایگان یا پولی',
+        max_length=20,
+        choices=PRICABLE_CHOICES,
+        default='premium'
+    )
+    max_participants = models.PositiveIntegerField(
+        'حداکثر شرکت‌کننده',
+        validators=[MinValueValidator(2), MaxValueValidator(1000)]
+    )
+    
+    level_cap = models.DecimalField(
+        'لول کارتها',
+        max_digits=2,
+        decimal_places=0,
+        validators=[MinValueValidator(11), MaxValueValidator(14)]
+    )
+    max_losses = models.DecimalField(
+        'حداکثر باخت مجاز',
+        max_digits=2,
+        decimal_places=0,
+        validators=[MinValueValidator(0), MaxValueValidator(5)]
+    )
+    time_duration = models.CharField(
+        'مدت تایم بازی',
+        max_length=3,
+        choices=TIME_DURATION_CHOICES,
+        default='1h'
+    )
+
+    # Financial
+    entry_fee = models.DecimalField(
+        'هزینه ورودی',
+        max_digits=10,
+        decimal_places=0,
+        validators=[MinValueValidator(0)]
+    )
+    prize_pool = models.DecimalField(
+        'جایزه کل',
+        max_digits=12,
+        decimal_places=0,
+        default=0
+    )
+
+    platform_commission = models.DecimalField(
+        'کمیسیون پلتفرم (%)',
+        max_digits=5,
+        decimal_places=2,
+        default=10,
+        validators=[MinValueValidator(0), MaxValueValidator(50)]
+    )
+
+    # Dates
+    registration_start = models.DateTimeField('شروع ثبت‌نام')
+    registration_end = models.DateTimeField('پایان ثبت‌نام')
+    start_date = models.DateTimeField('تاریخ شروع')
+    end_date = models.DateTimeField('تاریخ پایان', null=True, blank=True)
+    
+    # Status
+    status = models.CharField(
+        'وضعیت',
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='draft',
+        db_index=True
+    )
+    
+    # Rules
+    rules = RichTextField(verbose_name="قوانین", blank=True)
+
+    # Game settings
+    best_of = models.PositiveIntegerField(
+        'نفرات برتر',
+        default=8,
+        validators=[MinValueValidator(1), MaxValueValidator(30)],
+        help_text='Best of 3, 5, 7'
+    )
+    
+    # Featured
+    is_featured = models.BooleanField('ویژه', default=False)
+    
+    # Meta
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_tournaments',
+        verbose_name='ایجاد شده توسط'
+    )
+
+    total_participants = models.PositiveIntegerField('تعداد شرکت‌کننده', default=0)
+    total_matches = models.PositiveIntegerField('تعداد مسابقات', default=0)
+    
+    created_at = models.DateTimeField('تاریخ ایجاد', auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField('آخرین بروزرسانی', auto_now=True)
+    
+    class Meta:
+        db_table = 'tournaments'
+        verbose_name = 'تورنومنت'
+        verbose_name_plural = 'تورنومنت‌ها'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'registration_start']),
+            models.Index(fields=['start_date']),
+            models.Index(fields=['is_featured']),
+            models.Index(fields=['slug']),
+        ]
+    
+    def __str__(self):
+        return f"{self.title} - {self.get_status_display()}"
+    
+    def clean(self):
+        """Validate tournament data"""
+        # Check dates
+        if self.registration_start >= self.registration_end:
+            raise ValidationError('تاریخ پایان ثبت‌نام باید بعد از شروع باشد')
+        
+        if self.registration_end >= self.start_date:
+            raise ValidationError('تاریخ شروع تورنومنت باید بعد از پایان ثبت‌نام باشد')
+
+    
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            from django.utils.text import slugify
+            self.slug = slugify(self.title, allow_unicode=True)
+        super().save(*args, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        if not obj.created_by:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+    @property
+    def current_participants_count(self):
+        return self.participants.filter(status='confirmed').count()
+
+    @property
+    def is_full(self):
+        return self.current_participants_count >= self.max_participants
+
+    @property
+    def can_register(self):
+        now = timezone.now()
+        return (
+            self.status == 'registration' and
+            self.registration_start <= now <= self.registration_end and
+            not self.is_full
+        )
+    
+    @property
+    def prize_after_commission(self):
+        """Calculate prize pool after platform commission"""
+        commission = (self.prize_pool * self.platform_commission) / 100
+        return self.prize_pool - commission
+    
+    def calculate_prize_pool(self):
+        """Calculate total prize pool from entry fees"""
+        confirmed_count = self.current_participants_count
+        self.prize_pool = confirmed_count * self.entry_fee
+        self.save(update_fields=['prize_pool'])
+    
+    
+    @transaction.atomic
+    def start_tournament(self):
+        """Start the tournament"""
+        if self.status != 'ready':
+            raise ValidationError('تورنومنت باید در حالت آماده شروع باشد')
+
+        self.status = 'ongoing'
+        self.save(update_fields=['status'])
+        
+        return True
+
+    @transaction.atomic
+    def finish_tournament(self):
+        """Finish tournament and distribute prizes"""
+        if self.status != 'ongoing':
+            raise ValidationError('فقط تورنومنت‌های در حال برگزاری قابل پایان هستند')
+        
+        self.status = 'finished'
+        self.end_date = timezone.now()
+        self.save(update_fields=['status', 'end_date'])
+        
+        # Distribute prizes
+        # self._distribute_prizes()
+        
+        return True
+    
+    @transaction.atomic
+    def cancel_tournament(self, reason=''):
+        """Cancel tournament and refund entry fees"""
+        if self.status in ['finished', 'cancelled']:
+            raise ValidationError('نمی‌توان تورنومنت پایان یافته یا لغو شده را دوباره لغو کرد')
+        
+        self.status = 'cancelled'
+        self.save(update_fields=['status'])
+        
+        # Refund all confirmed participants
+        for participant in self.participants.filter(status='confirmed'):
+            participant.refund(reason=f'لغو تورنومنت: {reason}')
+        
+        return True
+
+
+class TournamentParticipant(models.Model):
+    """Tournament participant relation"""
+    
+    STATUS_CHOICES = [
+        ('pending', 'در انتظار'),
+        ('confirmed', 'تایید شده'),
+        ('cancelled', 'لغو شده'),
+        ('disqualified', 'محروم شده'),
+    ]
+    
+    tournament = models.ForeignKey(
+        Tournament,
+        on_delete=models.CASCADE,
+        related_name='participants',
+        verbose_name='تورنومنت'
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='tournament_participations',
+        verbose_name='کاربر'
+    )
+    status = models.CharField(
+        'وضعیت',
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending',
+        db_index=True
+    )
+
+    # Placement
+    placement = models.PositiveIntegerField(
+        'رتبه',
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)]
+    )
+    prize_won = models.DecimalField(
+        'جایزه برنده شده',
+        max_digits=10,
+        decimal_places=0,
+        default=0
+    )
+    
+    # Payment
+    payment = models.OneToOneField(
+        'payments.Payment',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='tournament_participant',
+        verbose_name='پرداخت'
+    )
+    
+    # Stats
+    matches_played = models.PositiveIntegerField('مسابقات انجام شده', default=0)
+    matches_won = models.PositiveIntegerField('مسابقات برده', default=0)
+    
+    # Disqualification
+    disqualification_reason = models.TextField('دلیل محرومیت', blank=True)
+
+    joined_at = models.DateTimeField('تاریخ ثبت‌نام', auto_now_add=True, db_index=True)
+    
+    class Meta:
+        db_table = 'tournament_participants'
+        verbose_name = 'شرکت‌کننده تورنومنت'
+        verbose_name_plural = 'شرکت‌کنندگان تورنومنت'
+        unique_together = ['tournament', 'user']
+        ordering = ['placement', '-joined_at']
+        indexes = [
+            models.Index(fields=['tournament', 'status']),
+            models.Index(fields=['user', '-joined_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.username} در {self.tournament.title}"
+    
+    def clean(self):
+        """Validate participant"""
+    
+    @transaction.atomic
+    def confirm_registration(self):
+        """Confirm participant registration after payment"""
+        if self.status != 'pending':
+            raise ValidationError('فقط ثبت‌نام‌های در انتظار قابل تایید هستند')
+        
+        self.status = 'confirmed'
+        self.save(update_fields=['status'])
+        
+        # Update tournament stats
+        self.tournament.total_participants = self.tournament.current_participants_count
+        self.tournament.calculate_prize_pool()
+        
+        # Update user stats
+        if hasattr(self.user, 'stats'):
+            self.user.stats.tournaments_played += 1
+            self.user.stats.save(update_fields=['tournaments_played'])
+        
+        # Send notification
+        from apps.notifications.models import Notification
+        Notification.create_notification(
+            user=self.user,
+            notification_type='registration_confirmed',
+            title='تایید ثبت‌نام',
+            message=f'ثبت‌نام شما در تورنومنت {self.tournament.title} تایید شد',
+            priority='high',
+            link=f'/tournaments/{self.tournament.slug}/'
+        )
+        
+        return True
+
+    @transaction.atomic
+    def disqualify(self, reason):
+        """Disqualify participant"""
+        if self.status == 'disqualified':
+            return False
+        
+        self.status = 'disqualified'
+        self.disqualification_reason = reason
+        self.save()
+        
+        # Send notification
+        from apps.notifications.models import Notification
+        Notification.create_notification(
+            user=self.user,
+            notification_type='warning',
+            title='محرومیت از تورنومنت',
+            message=f'شما از تورنومنت {self.tournament.title} محروم شدید. دلیل: {reason}',
+            priority='urgent',
+            link=f'/tournaments/{self.tournament.slug}/'
+        )
+        
+        return True
+    
+    @transaction.atomic
+    def refund(self, reason=''):
+        """Refund entry fee"""
+        if self.status == 'cancelled':
+            return False
+        
+        if self.payment and self.payment.status == 'completed':
+            self.payment.refund(reason=reason)
+        
+        self.status = 'cancelled'
+        self.save(update_fields=['status'])
+        
+        return True
+
+
+class TournamentInvitation(models.Model):
+    """Invitation system for private tournaments"""
+    
+    STATUS_CHOICES = [
+        ('pending', 'در انتظار'),
+        ('accepted', 'پذیرفته شده'),
+        ('declined', 'رد شده'),
+        ('expired', 'منقضی شده'),
+    ]
+    
+    tournament = models.ForeignKey(
+        Tournament,
+        on_delete=models.CASCADE,
+        related_name='invitations',
+        verbose_name='تورنومنت'
+    )
+    invited_user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='tournament_invitations',
+        verbose_name='کاربر دعوت شده'
+    )
+    invited_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='sent_tournament_invitations',
+        verbose_name='دعوت شده توسط'
+    )
+    
+    code = models.CharField(
+        'کد دعوت',
+        max_length=20,
+        unique=True,
+        db_index=True
+    )
+    status = models.CharField(
+        'وضعیت',
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
+    
+    message = models.TextField('پیام', blank=True)
+    expires_at = models.DateTimeField('تاریخ انقضا')
+    
+    created_at = models.DateTimeField('تاریخ ایجاد', auto_now_add=True)
+    responded_at = models.DateTimeField('تاریخ پاسخ', null=True, blank=True)
+    
+    class Meta:
+        db_table = 'tournament_invitations'
+        verbose_name = 'دعوت‌نامه تورنومنت'
+        verbose_name_plural = 'دعوت‌نامه‌های تورنومنت'
+        unique_together = ['tournament', 'invited_user']
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Invitation to {self.invited_user.username} for {self.tournament.title}"
+    
+    def save(self, *args, **kwargs):
+        if not self.code:
+            import secrets
+            self.code = secrets.token_urlsafe(12)
+        super().save(*args, **kwargs)
+    
+    @property
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+    
+    def accept(self):
+        """Accept invitation"""
+        if self.status != 'pending':
+            raise ValidationError('فقط دعوت‌نامه‌های در انتظار قابل پذیرش هستند')
+        
+        if self.is_expired:
+            raise ValidationError('دعوت‌نامه منقضی شده است')
+        
+        self.status = 'accepted'
+        self.responded_at = timezone.now()
+        self.save()
+        
+        return True
+    
+    def decline(self):
+        """Decline invitation"""
+        if self.status != 'pending':
+            raise ValidationError('فقط دعوت‌نامه‌های در انتظار قابل رد هستند')
+        
+        self.status = 'declined'
+        self.responded_at = timezone.now()
+        self.save()
+        
+        return True
+    
+    @classmethod
+    def expire_old_invitations(cls):
+        """Expire old pending invitations"""
+        return cls.objects.filter(
+            status='pending',
+            expires_at__lt=timezone.now()
+        ).update(status='expired')
