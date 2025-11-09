@@ -19,7 +19,7 @@ class GameSerializer(serializers.ModelSerializer):
             'id', 'match', 'game_number', 'winner', 'winner_username',
             'player1_crowns', 'player2_crowns',
             'player1_towers_destroyed', 'player2_towers_destroyed',
-            'is_overtime', 'screenshot', 'duration_seconds',
+            'is_overtime', 'duration_seconds',
             'is_verified', 'verified_by', 'verified_by_username', 'verified_at',
             'submitted_by', 'submitted_by_username', 'played_at'
         ]
@@ -60,7 +60,7 @@ class GameCreateSerializer(serializers.ModelSerializer):
             'match', 'game_number', 'winner',
             'player1_crowns', 'player2_crowns',
             'player1_towers_destroyed', 'player2_towers_destroyed',
-            'is_overtime', 'screenshot', 'duration_seconds', 'submitted_by'
+            'is_overtime', 'duration_seconds', 'submitted_by'
         ]
 
     def validate(self, data):
