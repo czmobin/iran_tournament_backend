@@ -1,7 +1,13 @@
 from rest_framework import serializers
 from django.utils import timezone
 from django.db import transaction
-from .models import Tournament, TournamentParticipant, TournamentInvitation
+from .models import (
+    Tournament,
+    TournamentParticipant,
+    TournamentInvitation,
+    PlayerBattleLog,
+    TournamentRanking,
+)
 
 
 class UserBasicSerializer(serializers.Serializer):
@@ -60,7 +66,10 @@ class TournamentDetailSerializer(serializers.ModelSerializer):
             'prize_after_commission', 'registration_start', 'registration_end',
             'start_date', 'end_date', 'status', 'status_display', 'rules',
             'best_of', 'is_featured', 'created_by', 'total_participants',
-            'total_matches', 'is_full', 'can_register', 'created_at', 'updated_at'
+            'total_matches', 'is_full', 'can_register', 'created_at', 'updated_at',
+            # Clash Royale integration fields
+            'clash_royale_tournament_tag', 'tournament_password', 'auto_tracking_enabled',
+            'last_battle_sync_time', 'tracking_started_at'
         ]
         read_only_fields = [
             'current_participants', 'is_full', 'can_register',
@@ -175,10 +184,107 @@ class TournamentStatsSerializer(serializers.Serializer):
 class TournamentMinimalSerializer(serializers.ModelSerializer):
     """Minimal tournament info for listings"""
     status_display = serializers.CharField(source='get_status_display', read_only=True)
-    
+
     class Meta:
         model = Tournament
         fields = [
             'id', 'title', 'slug', 'banner', 'status', 'status_display',
             'prize_pool', 'entry_fee', 'start_date', 'is_featured'
         ]
+
+
+class PlayerBattleLogSerializer(serializers.ModelSerializer):
+    """Serializer for player battle logs"""
+    battle_type_display = serializers.CharField(source='get_battle_type_display', read_only=True)
+    crown_difference = serializers.IntegerField(read_only=True)
+    result = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PlayerBattleLog
+        fields = [
+            'id', 'battle_time', 'battle_type', 'battle_type_display',
+            'game_mode', 'player_tag', 'player_name', 'player_crowns',
+            'opponent_tag', 'opponent_name', 'opponent_crowns',
+            'is_winner', 'is_draw', 'result', 'crown_difference',
+            'player_cards', 'opponent_cards', 'arena_name',
+            'is_counted', 'created_at'
+        ]
+        read_only_fields = ['created_at']
+
+    def get_result(self, obj):
+        """Get readable battle result"""
+        if obj.is_winner:
+            return 'برد'
+        elif obj.is_draw:
+            return 'مساوی'
+        else:
+            return 'باخت'
+
+
+class PlayerBattleLogDetailSerializer(PlayerBattleLogSerializer):
+    """Detailed serializer for battle logs with full data"""
+    participant = serializers.SerializerMethodField()
+
+    class Meta(PlayerBattleLogSerializer.Meta):
+        fields = PlayerBattleLogSerializer.Meta.fields + [
+            'participant', 'player_king_tower_hp', 'player_princess_towers_hp',
+            'opponent_king_tower_hp', 'opponent_princess_towers_hp',
+            'arena_id', 'raw_battle_data'
+        ]
+
+    def get_participant(self, obj):
+        """Get participant basic info"""
+        return {
+            'id': obj.participant.id,
+            'username': obj.participant.user.username,
+        }
+
+
+class TournamentRankingSerializer(serializers.ModelSerializer):
+    """Serializer for tournament rankings"""
+    user = UserBasicSerializer(source='participant.user', read_only=True)
+    participant_id = serializers.IntegerField(source='participant.id', read_only=True)
+
+    class Meta:
+        model = TournamentRanking
+        fields = [
+            'id', 'rank', 'participant_id', 'user', 'total_battles',
+            'total_wins', 'total_losses', 'total_draws',
+            'total_crowns', 'total_crowns_lost', 'win_rate',
+            'score', 'last_battle_time', 'calculated_at'
+        ]
+        read_only_fields = [
+            'rank', 'total_battles', 'total_wins', 'total_losses',
+            'total_draws', 'total_crowns', 'total_crowns_lost',
+            'win_rate', 'score', 'calculated_at'
+        ]
+
+
+class TournamentWithClashRoyaleSerializer(serializers.ModelSerializer):
+    """Extended tournament serializer with Clash Royale integration fields"""
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    game_mode_display = serializers.CharField(source='get_game_mode_display', read_only=True)
+    current_participants = serializers.IntegerField(source='current_participants_count', read_only=True)
+
+    class Meta:
+        model = Tournament
+        fields = [
+            'id', 'title', 'slug', 'status', 'status_display',
+            'game_mode', 'game_mode_display', 'current_participants',
+            'clash_royale_tournament_tag', 'tournament_password',
+            'auto_tracking_enabled', 'last_battle_sync_time',
+            'tracking_started_at', 'start_date', 'end_date'
+        ]
+        read_only_fields = [
+            'last_battle_sync_time', 'tracking_started_at',
+            'auto_tracking_enabled'
+        ]
+
+
+class TournamentBattleStatsSerializer(serializers.Serializer):
+    """Aggregated battle statistics for a tournament"""
+    total_battles = serializers.IntegerField()
+    total_players_with_battles = serializers.IntegerField()
+    average_battles_per_player = serializers.FloatField()
+    most_active_player = serializers.CharField()
+    last_sync_time = serializers.DateTimeField()
