@@ -8,7 +8,7 @@ from django.utils import timezone
 from .models import (
     Tournament, TournamentParticipant,
     TournamentInvitation, PlayerBattleLog,
-    TournamentRanking
+    TournamentRanking, TournamentChat
 )
 
 
@@ -754,3 +754,113 @@ class TournamentRankingAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         return qs.select_related('tournament', 'participant__user')
+
+
+@admin.register(TournamentChat)
+class TournamentChatAdmin(admin.ModelAdmin):
+    """Tournament chat messages admin"""
+
+    list_display = (
+        'id', 'tournament_link', 'sender_link', 'message_preview',
+        'reply_indicator', 'deleted_indicator', 'created_at'
+    )
+
+    list_filter = (
+        'tournament', 'is_deleted', 'created_at'
+    )
+
+    search_fields = (
+        'message', 'sender__username', 'tournament__title'
+    )
+
+    readonly_fields = (
+        'sender', 'tournament', 'created_at', 'updated_at',
+        'deleted_by', 'deleted_at'
+    )
+
+    fieldsets = (
+        ('اطلاعات پیام', {
+            'fields': ('tournament', 'sender', 'message', 'reply_to')
+        }),
+        ('وضعیت', {
+            'fields': ('is_deleted', 'deleted_by', 'deleted_at')
+        }),
+        ('تاریخچه', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        })
+    )
+
+    actions = ['soft_delete_messages', 'restore_messages']
+
+    def tournament_link(self, obj):
+        url = reverse('admin:tournaments_tournament_change', args=[obj.tournament.id])
+        return format_html('<a href="{}">{}</a>', url, obj.tournament.title)
+    tournament_link.short_description = 'تورنمنت'
+
+    def sender_link(self, obj):
+        url = reverse('admin:accounts_user_change', args=[obj.sender.id])
+        return format_html('<a href="{}">{}</a>', url, obj.sender.username)
+    sender_link.short_description = 'فرستنده'
+
+    def message_preview(self, obj):
+        if obj.is_deleted:
+            return format_html(
+                '<span style="color: #999; text-decoration: line-through;">{}</span>',
+                obj.message[:100]
+            )
+        return obj.message[:100] + ('...' if len(obj.message) > 100 else '')
+    message_preview.short_description = 'پیام'
+
+    def reply_indicator(self, obj):
+        if obj.reply_to:
+            return format_html(
+                '<span style="color: #0066cc;">↩️ پاسخ</span>'
+            )
+        return '-'
+    reply_indicator.short_description = 'نوع'
+
+    def deleted_indicator(self, obj):
+        if obj.is_deleted:
+            return format_html(
+                '<span style="background-color: red; color: white; '
+                'padding: 2px 8px; border-radius: 3px;">✗ حذف شده</span>'
+            )
+        return format_html(
+            '<span style="background-color: green; color: white; '
+            'padding: 2px 8px; border-radius: 3px;">✓ فعال</span>'
+        )
+    deleted_indicator.short_description = 'وضعیت'
+
+    def soft_delete_messages(self, request, queryset):
+        """Soft delete selected messages"""
+        updated = 0
+        for message in queryset.filter(is_deleted=False):
+            message.delete_message(request.user)
+            updated += 1
+
+        self.message_user(
+            request,
+            f'{updated} پیام حذف شد.',
+            messages.SUCCESS
+        )
+    soft_delete_messages.short_description = 'حذف پیام‌های انتخاب شده'
+
+    def restore_messages(self, request, queryset):
+        """Restore deleted messages"""
+        updated = queryset.filter(is_deleted=True).update(
+            is_deleted=False,
+            deleted_by=None,
+            deleted_at=None
+        )
+
+        self.message_user(
+            request,
+            f'{updated} پیام بازیابی شد.',
+            messages.SUCCESS
+        )
+    restore_messages.short_description = 'بازیابی پیام‌های حذف شده'
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related('tournament', 'sender', 'reply_to', 'deleted_by')

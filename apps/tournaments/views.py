@@ -10,7 +10,7 @@ from django.db import transaction
 
 from .models import (
     Tournament, TournamentParticipant, TournamentInvitation,
-    PlayerBattleLog, TournamentRanking
+    PlayerBattleLog, TournamentRanking, TournamentChat
 )
 from .serializers import (
     TournamentListSerializer, TournamentDetailSerializer,
@@ -18,7 +18,7 @@ from .serializers import (
     TournamentInvitationSerializer, TournamentLeaderboardSerializer,
     TournamentStatsSerializer, PlayerBattleLogSerializer,
     PlayerBattleLogDetailSerializer, TournamentRankingSerializer,
-    TournamentBattleStatsSerializer
+    TournamentBattleStatsSerializer, TournamentChatSerializer
 )
 from .filters import TournamentFilter, ParticipantFilter
 from .pagination import TournamentPagination, ParticipantPagination
@@ -509,3 +509,98 @@ class TournamentRankingViewSet(viewsets.ReadOnlyModelViewSet):
 
         serializer = self.get_serializer(rankings, many=True)
         return Response(serializer.data)
+
+
+class TournamentChatViewSet(viewsets.ModelViewSet):
+    """ViewSet for tournament chat messages"""
+    serializer_class = TournamentChatSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering = ['created_at']
+
+    def get_queryset(self):
+        """Get chat messages for tournaments user is participating in"""
+        queryset = TournamentChat.objects.select_related(
+            'tournament', 'sender', 'reply_to'
+        ).filter(is_deleted=False)
+
+        # Filter by tournament slug if provided
+        tournament_slug = self.request.query_params.get('tournament')
+        if tournament_slug:
+            queryset = queryset.filter(tournament__slug=tournament_slug)
+
+            # Verify user is a participant
+            tournament = get_object_or_404(Tournament, slug=tournament_slug)
+            if not tournament.participants.filter(
+                user=self.request.user,
+                status='confirmed'
+            ).exists():
+                return TournamentChat.objects.none()
+
+        return queryset
+
+    @action(detail=False, methods=['get'], url_path='tournament/(?P<tournament_slug>[^/.]+)')
+    def tournament_chat(self, request, tournament_slug=None):
+        """Get chat messages for a specific tournament"""
+        tournament = get_object_or_404(Tournament, slug=tournament_slug)
+
+        # Verify user is a participant
+        if not tournament.participants.filter(
+            user=request.user,
+            status='confirmed'
+        ).exists():
+            return Response(
+                {'error': 'فقط شرکت‌کنندگان تورنمنت می‌توانند چت را مشاهده کنند'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        messages = TournamentChat.objects.filter(
+            tournament=tournament,
+            is_deleted=False
+        ).select_related('sender', 'reply_to').order_by('created_at')
+
+        # Paginate results
+        page = self.paginate_queryset(messages)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(messages, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='delete-message')
+    def delete_message(self, request, pk=None):
+        """Soft delete a chat message"""
+        message = self.get_object()
+
+        # Check permissions
+        can_delete = (
+            message.sender == request.user or
+            request.user.is_staff or
+            request.user.is_superuser or
+            message.tournament.created_by == request.user
+        )
+
+        if not can_delete:
+            return Response(
+                {'error': 'شما مجاز به حذف این پیام نیستید'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        message.delete_message(request.user)
+
+        return Response(
+            {'message': 'پیام با موفقیت حذف شد'},
+            status=status.HTTP_200_OK
+        )
+
+    def create(self, request, *args, **kwargs):
+        """Create a new chat message"""
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED
+        )

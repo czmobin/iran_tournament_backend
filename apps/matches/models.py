@@ -15,7 +15,6 @@ class Match(models.Model):
         ('ongoing', 'در حال بازی'),
         ('waiting_result', 'در انتظار نتیجه'),
         ('completed', 'تمام شده'),
-        ('disputed', 'اعتراض شده'),
         ('cancelled', 'لغو شده'),
     ]
     
@@ -256,16 +255,7 @@ class Game(models.Model):
     
     # Battle mode (if applicable)
     is_overtime = models.BooleanField('اضافه وقت', default=False)
-    
-    # Screenshots/proof
-    screenshot = models.ImageField(
-        'اسکرین‌شات',
-        upload_to='match_screenshots/%Y/%m/%d/',
-        null=True,
-        blank=True,
-        help_text='اسکرین‌شات نتیجه بازی'
-    )
-    
+
     # Timing
     duration_seconds = models.PositiveIntegerField(
         'مدت بازی (ثانیه)',
@@ -344,173 +334,8 @@ class Game(models.Model):
         return True
 
 
-class MatchDispute(models.Model):
-    """Dispute resolution for matches"""
-    
-    STATUS_CHOICES = [
-        ('open', 'باز'),
-        ('under_review', 'در حال بررسی'),
-        ('resolved', 'حل شده'),
-        ('rejected', 'رد شده'),
-    ]
-    
-    DISPUTE_TYPE_CHOICES = [
-        ('cheating', 'تقلب'),
-        ('no_show', 'عدم حضور حریف'),
-        ('other', 'سایر'),
-    ]
-    
-    match = models.ForeignKey(
-        Match,
-        on_delete=models.CASCADE,
-        related_name='disputes',
-        verbose_name='مسابقه'
-    )
-    game = models.ForeignKey(
-        Game,
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-        related_name='disputes',
-        verbose_name='بازی'
-    )
-    reporter = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name='filed_disputes',
-        verbose_name='گزارش‌دهنده'
-    )
-    
-    dispute_type = models.CharField(
-        'نوع اعتراض',
-        max_length=20,
-        choices=DISPUTE_TYPE_CHOICES,
-        default='wrong_result'
-    )
-    
-    reason = models.TextField('دلیل اعتراض')
-    evidence = models.ImageField(
-        'مدرک',
-        upload_to='dispute_evidence/%Y/%m/%d/',
-        null=True,
-        blank=True,
-        help_text='تصویر مدرک اعتراض'
-    )
-    additional_evidence = models.JSONField(
-        'مدارک اضافی',
-        default=list,
-        blank=True,
-        help_text='لینک‌ها یا توضیحات اضافی'
-    )
-    
-    status = models.CharField(
-        'وضعیت',
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default='open'
-    )
-    
-    # Admin response
-    admin_response = models.TextField('پاسخ ادمین', blank=True)
-    resolution_action = models.CharField(
-        'اقدام انجام شده',
-        max_length=200,
-        blank=True,
-        help_text='مثال: نتیجه اصلاح شد، بازیکن محروم شد، و غیره'
-    )
-    resolved_by = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='resolved_disputes',
-        verbose_name='حل شده توسط'
-    )
-    
-    # Timestamps
-    created_at = models.DateTimeField('تاریخ ایجاد', auto_now_add=True)
-    resolved_at = models.DateTimeField('تاریخ حل', null=True, blank=True)
-    
-    # Priority
-    priority = models.PositiveIntegerField(
-        'اولویت',
-        default=1,
-        validators=[MinValueValidator(1), MaxValueValidator(5)],
-        help_text='1=کم، 5=خیلی زیاد'
-    )
-    
-    class Meta:
-        db_table = 'match_disputes'
-        verbose_name = 'اعتراض مسابقه'
-        verbose_name_plural = 'اعتراضات مسابقات'
-        ordering = ['-priority', '-created_at']
-        indexes = [
-            models.Index(fields=['status', '-created_at']),
-            models.Index(fields=['match', 'reporter']),
-        ]
-    
-    def __str__(self):
-        return f"Dispute by {self.reporter.username} on Match {self.match.match_number}"
-    
-    def clean(self):
-        """Validate dispute data"""
-        # Reporter must be one of the match players
-        if self.reporter not in [self.match.player1, self.match.player2]:
-            raise ValidationError('فقط بازیکنان مسابقه می‌توانند اعتراض کنند')
-        
-        # If game is specified, it must belong to the match
-        if self.game and self.game.match != self.match:
-            raise ValidationError('بازی انتخاب شده متعلق به این مسابقه نیست')
-    
-    def start_review(self, admin_user):
-        """Start reviewing the dispute"""
-        if self.status != 'open':
-            return False
-        
-        self.status = 'under_review'
-        self.resolved_by = admin_user
-        self.save(update_fields=['status', 'resolved_by'])
-        
-        # Update match status
-        if self.match.status != 'disputed':
-            self.match.status = 'disputed'
-            self.match.save(update_fields=['status'])
-        
-        return True
-    
-    def resolve(self, admin_user, response, action=''):
-        """Resolve the dispute"""
-        if self.status not in ['open', 'under_review']:
-            return False
-        
-        self.status = 'resolved'
-        self.admin_response = response
-        self.resolution_action = action
-        self.resolved_by = admin_user
-        self.resolved_at = timezone.now()
-        self.save()
-        
-        # Check if there are any other open disputes for this match
-        if not self.match.disputes.filter(status__in=['open', 'under_review']).exists():
-            # Restore match status if it was completed
-            if self.match.winner:
-                self.match.status = 'completed'
-                self.match.save(update_fields=['status'])
-        
-        return True
-    
-    def reject(self, admin_user, response):
-        """Reject the dispute"""
-        if self.status not in ['open', 'under_review']:
-            return False
-        
-        self.status = 'rejected'
-        self.admin_response = response
-        self.resolved_by = admin_user
-        self.resolved_at = timezone.now()
-        self.save()
-        
-        return True
+# MatchDispute model removed - dispute system was too complex
+# If disputes are needed in future, handle via admin panel manually
 
 
 class MatchChat(models.Model):

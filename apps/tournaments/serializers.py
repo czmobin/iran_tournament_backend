@@ -7,6 +7,7 @@ from .models import (
     TournamentInvitation,
     PlayerBattleLog,
     TournamentRanking,
+    TournamentChat,
 )
 
 
@@ -288,3 +289,81 @@ class TournamentBattleStatsSerializer(serializers.Serializer):
     average_battles_per_player = serializers.FloatField()
     most_active_player = serializers.CharField()
     last_sync_time = serializers.DateTimeField()
+
+
+class TournamentChatSerializer(serializers.ModelSerializer):
+    """Serializer for tournament chat messages"""
+    sender = UserBasicSerializer(read_only=True)
+    reply_to_message = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TournamentChat
+        fields = [
+            'id', 'tournament', 'sender', 'message', 'reply_to',
+            'reply_to_message', 'is_deleted', 'deleted_by', 'deleted_at',
+            'created_at', 'updated_at', 'can_delete'
+        ]
+        read_only_fields = [
+            'sender', 'is_deleted', 'deleted_by', 'deleted_at',
+            'created_at', 'updated_at'
+        ]
+
+    def get_reply_to_message(self, obj):
+        """Get the message being replied to"""
+        if obj.reply_to and not obj.reply_to.is_deleted:
+            return {
+                'id': obj.reply_to.id,
+                'sender_username': obj.reply_to.sender.username,
+                'message': obj.reply_to.message[:100],
+                'created_at': obj.reply_to.created_at
+            }
+        return None
+
+    def get_can_delete(self, obj):
+        """Check if current user can delete this message"""
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+
+        # Message owner or tournament admin can delete
+        is_owner = obj.sender == request.user
+        is_admin = request.user.is_staff or request.user.is_superuser
+        is_tournament_creator = obj.tournament.created_by == request.user
+
+        return is_owner or is_admin or is_tournament_creator
+
+    def validate_tournament(self, value):
+        """Validate tournament allows messaging"""
+        if value.status not in ['registration', 'ready', 'ongoing']:
+            raise serializers.ValidationError(
+                'فقط در تورنمنت‌های فعال می‌توان پیام فرستاد'
+            )
+        return value
+
+    def validate(self, data):
+        """Validate sender is a participant"""
+        request = self.context.get('request')
+        if not request:
+            return data
+
+        tournament = data.get('tournament')
+        if not tournament:
+            return data
+
+        # Check if user is a confirmed participant
+        if not tournament.participants.filter(
+            user=request.user,
+            status='confirmed'
+        ).exists():
+            raise serializers.ValidationError(
+                'فقط شرکت‌کنندگان تورنمنت می‌توانند پیام بفرستند'
+            )
+
+        return data
+
+    def create(self, validated_data):
+        """Create chat message with sender from request"""
+        request = self.context.get('request')
+        validated_data['sender'] = request.user
+        return super().create(validated_data)

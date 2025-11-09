@@ -811,3 +811,82 @@ class TournamentRanking(models.Model):
 
         self.save()
         return True
+
+
+class TournamentChat(models.Model):
+    """Chat messages between tournament participants"""
+
+    tournament = models.ForeignKey(
+        Tournament,
+        on_delete=models.CASCADE,
+        related_name='chat_messages',
+        verbose_name='تورنمنت'
+    )
+    sender = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='sent_tournament_messages',
+        verbose_name='فرستنده'
+    )
+
+    message = models.TextField('پیام', max_length=1000)
+
+    # Optional: Reply to another message
+    reply_to = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='replies',
+        verbose_name='پاسخ به'
+    )
+
+    # Moderation
+    is_deleted = models.BooleanField('حذف شده', default=False)
+    deleted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_tournament_messages',
+        verbose_name='حذف شده توسط'
+    )
+    deleted_at = models.DateTimeField('زمان حذف', null=True, blank=True)
+
+    created_at = models.DateTimeField('زمان ارسال', auto_now_add=True)
+    updated_at = models.DateTimeField('آخرین ویرایش', auto_now=True)
+
+    class Meta:
+        db_table = 'tournament_chats'
+        verbose_name = 'چت تورنمنت'
+        verbose_name_plural = 'چت‌های تورنمنت'
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['tournament', 'created_at']),
+            models.Index(fields=['sender', '-created_at']),
+            models.Index(fields=['tournament', 'is_deleted']),
+        ]
+
+    def __str__(self):
+        return f"{self.sender.username} در {self.tournament.title}: {self.message[:50]}"
+
+    def clean(self):
+        """Validate chat message"""
+        # Check if sender is a participant
+        if not self.tournament.participants.filter(
+            user=self.sender,
+            status='confirmed'
+        ).exists():
+            raise ValidationError('فقط شرکت‌کنندگان تورنمنت می‌توانند پیام بفرستند')
+
+        # Check if tournament is active
+        if self.tournament.status not in ['registration', 'ready', 'ongoing']:
+            raise ValidationError('فقط در تورنمنت‌های فعال می‌توان پیام فرستاد')
+
+    def delete_message(self, deleted_by_user):
+        """Soft delete a message"""
+        if not self.is_deleted:
+            self.is_deleted = True
+            self.deleted_by = deleted_by_user
+            self.deleted_at = timezone.now()
+            self.save(update_fields=['is_deleted', 'deleted_by', 'deleted_at'])

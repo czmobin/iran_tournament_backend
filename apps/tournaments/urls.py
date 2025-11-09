@@ -5,7 +5,8 @@ from .views import (
     TournamentParticipantViewSet,
     TournamentInvitationViewSet,
     PlayerBattleLogViewSet,
-    TournamentRankingViewSet
+    TournamentRankingViewSet,
+    TournamentChatViewSet
 )
 
 app_name = 'tournaments'
@@ -16,6 +17,7 @@ router.register(r'participants', TournamentParticipantViewSet, basename='partici
 router.register(r'invitations', TournamentInvitationViewSet, basename='invitation')
 router.register(r'battle-logs', PlayerBattleLogViewSet, basename='battle-log')
 router.register(r'rankings', TournamentRankingViewSet, basename='ranking')
+router.register(r'chat', TournamentChatViewSet, basename='chat')
 
 urlpatterns = [
     path('', include(router.urls)),
