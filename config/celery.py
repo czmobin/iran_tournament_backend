@@ -69,6 +69,12 @@ app.conf.beat_schedule = {
         'task': 'apps.notifications.tasks.send_daily_digest',
         'schedule': crontab(hour=8, minute=0),
     },
+
+    # Sync Clash Royale battle logs every 2 minutes for active tournaments
+    'sync-tournament-battle-logs': {
+        'task': 'apps.tournaments.tasks.sync_tournament_battle_logs',
+        'schedule': crontab(minute='*/2'),
+    },
 }
 
 # Task settings

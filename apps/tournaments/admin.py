@@ -6,8 +6,9 @@ from django.contrib import messages
 from django.db.models import Count, Sum, Q
 from django.utils import timezone
 from .models import (
-    Tournament, TournamentParticipant, 
-    TournamentInvitation
+    Tournament, TournamentParticipant,
+    TournamentInvitation, PlayerBattleLog,
+    TournamentRanking
 )
 
 
@@ -54,7 +55,8 @@ class TournamentAdmin(admin.ModelAdmin):
     readonly_fields = (
         'slug', 'total_participants', 'total_matches',
         'created_at', 'updated_at',
-        'banner_preview'
+        'banner_preview', 'last_battle_sync_time',
+        'tracking_started_at', 'auto_tracking_enabled'
     )
     
     # حذف autocomplete_fields چون created_by رو readonly کردیم
@@ -92,6 +94,17 @@ class TournamentAdmin(admin.ModelAdmin):
         ('قوانین', {
             'fields': ('rules',),
             'classes': ('collapse',)
+        }),
+        ('اتصال به Clash Royale', {
+            'fields': (
+                'clash_royale_tournament_tag',
+                'tournament_password',
+                'auto_tracking_enabled',
+                'last_battle_sync_time',
+                'tracking_started_at'
+            ),
+            'classes': ('collapse',),
+            'description': 'تنظیمات اتصال به تورنمنت Clash Royale'
         }),
         ('تنظیمات اضافی', {
             'fields': ('is_featured',),
@@ -507,3 +520,237 @@ class TournamentInvitationAdmin(admin.ModelAdmin):
             return format_html('<span style="color: red;">منقضی شده</span>')
         return format_html('<span style="color: green;">معتبر</span>')
     expires_badge.short_description = 'اعتبار'
+
+
+@admin.register(PlayerBattleLog)
+class PlayerBattleLogAdmin(admin.ModelAdmin):
+    """Player battle log admin"""
+
+    list_display = (
+        'battle_id', 'player_name', 'opponent_name',
+        'result_badge', 'crowns_display', 'tournament_link',
+        'battle_time'
+    )
+
+    list_filter = (
+        'battle_type', 'is_winner', 'is_draw',
+        'is_counted', 'battle_time', 'tournament'
+    )
+
+    search_fields = (
+        'player_name', 'player_tag',
+        'opponent_name', 'opponent_tag',
+        'tournament__title'
+    )
+
+    readonly_fields = (
+        'tournament', 'participant', 'battle_time',
+        'battle_type', 'game_mode', 'player_tag',
+        'player_name', 'player_crowns', 'opponent_tag',
+        'opponent_name', 'opponent_crowns', 'is_winner',
+        'is_draw', 'arena_name', 'created_at',
+        'player_cards', 'opponent_cards', 'raw_battle_data'
+    )
+
+    fieldsets = (
+        ('اطلاعات اصلی', {
+            'fields': (
+                'tournament', 'participant',
+                'battle_time', 'battle_type', 'game_mode'
+            )
+        }),
+        ('بازیکن', {
+            'fields': (
+                'player_tag', 'player_name', 'player_crowns',
+                'player_king_tower_hp', 'player_princess_towers_hp',
+                'player_cards'
+            )
+        }),
+        ('حریف', {
+            'fields': (
+                'opponent_tag', 'opponent_name', 'opponent_crowns',
+                'opponent_king_tower_hp', 'opponent_princess_towers_hp',
+                'opponent_cards'
+            )
+        }),
+        ('نتیجه', {
+            'fields': ('is_winner', 'is_draw', 'is_counted')
+        }),
+        ('آرنا', {
+            'fields': ('arena_name', 'arena_id'),
+            'classes': ('collapse',)
+        }),
+        ('داده خام', {
+            'fields': ('raw_battle_data',),
+            'classes': ('collapse',)
+        }),
+        ('تاریخچه', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        })
+    )
+
+    def battle_id(self, obj):
+        return f"#{obj.id}"
+    battle_id.short_description = 'شناسه'
+
+    def result_badge(self, obj):
+        if obj.is_winner:
+            return format_html(
+                '<span style="background-color: green; color: white; '
+                'padding: 2px 8px; border-radius: 3px;">✓ برد</span>'
+            )
+        elif obj.is_draw:
+            return format_html(
+                '<span style="background-color: gray; color: white; '
+                'padding: 2px 8px; border-radius: 3px;">= مساوی</span>'
+            )
+        else:
+            return format_html(
+                '<span style="background-color: red; color: white; '
+                'padding: 2px 8px; border-radius: 3px;">✗ باخت</span>'
+            )
+    result_badge.short_description = 'نتیجه'
+    result_badge.admin_order_field = 'is_winner'
+
+    def crowns_display(self, obj):
+        return format_html(
+            '<strong>{}</strong> - <strong>{}</strong>',
+            obj.player_crowns, obj.opponent_crowns
+        )
+    crowns_display.short_description = 'تاج‌ها'
+
+    def tournament_link(self, obj):
+        url = reverse('admin:tournaments_tournament_change', args=[obj.tournament.id])
+        return format_html('<a href="{}">{}</a>', url, obj.tournament.title)
+    tournament_link.short_description = 'تورنمنت'
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related('tournament', 'participant__user')
+
+
+@admin.register(TournamentRanking)
+class TournamentRankingAdmin(admin.ModelAdmin):
+    """Tournament ranking admin"""
+
+    list_display = (
+        'rank_badge', 'user_link', 'tournament_link',
+        'score_display', 'stats_display', 'win_rate_badge',
+        'calculated_at'
+    )
+
+    list_filter = (
+        'tournament', 'rank', 'calculated_at'
+    )
+
+    search_fields = (
+        'participant__user__username',
+        'tournament__title'
+    )
+
+    readonly_fields = (
+        'tournament', 'participant', 'rank',
+        'total_battles', 'total_wins', 'total_losses',
+        'total_draws', 'total_crowns', 'total_crowns_lost',
+        'win_rate', 'score', 'last_battle_time',
+        'calculated_at'
+    )
+
+    fieldsets = (
+        ('اطلاعات اصلی', {
+            'fields': ('tournament', 'participant', 'rank', 'score')
+        }),
+        ('آمار بازی', {
+            'fields': (
+                'total_battles', 'total_wins',
+                'total_losses', 'total_draws',
+                'win_rate'
+            )
+        }),
+        ('آمار تاج', {
+            'fields': ('total_crowns', 'total_crowns_lost')
+        }),
+        ('تاریخچه', {
+            'fields': ('last_battle_time', 'calculated_at'),
+            'classes': ('collapse',)
+        })
+    )
+
+    actions = ['recalculate_rankings']
+
+    def rank_badge(self, obj):
+        medals = {1: '🥇', 2: '🥈', 3: '🥉'}
+        medal = medals.get(obj.rank, '🏅')
+        return format_html(
+            '<strong style="font-size: 16px;">{} #{}</strong>',
+            medal, obj.rank
+        )
+    rank_badge.short_description = 'رتبه'
+    rank_badge.admin_order_field = 'rank'
+
+    def user_link(self, obj):
+        url = reverse('admin:accounts_user_change', args=[obj.participant.user.id])
+        return format_html(
+            '<a href="{}">{}</a>',
+            url, obj.participant.user.username
+        )
+    user_link.short_description = 'کاربر'
+
+    def tournament_link(self, obj):
+        url = reverse('admin:tournaments_tournament_change', args=[obj.tournament.id])
+        return format_html('<a href="{}">{}</a>', url, obj.tournament.title)
+    tournament_link.short_description = 'تورنمنت'
+
+    def score_display(self, obj):
+        return format_html(
+            '<strong style="color: #0066cc; font-size: 14px;">{} امتیاز</strong>',
+            obj.score
+        )
+    score_display.short_description = 'امتیاز'
+    score_display.admin_order_field = 'score'
+
+    def stats_display(self, obj):
+        return format_html(
+            '<strong style="color: green;">{}</strong>W / '
+            '<strong style="color: red;">{}</strong>L / '
+            '<strong style="color: gray;">{}</strong>D',
+            obj.total_wins, obj.total_losses, obj.total_draws
+        )
+    stats_display.short_description = 'بازی‌ها'
+
+    def win_rate_badge(self, obj):
+        wr = float(obj.win_rate)
+        if wr >= 70:
+            color = 'green'
+        elif wr >= 50:
+            color = 'orange'
+        else:
+            color = 'red'
+
+        return format_html(
+            '<span style="color: {}; font-weight: bold;">{}%</span>',
+            color, round(wr, 1)
+        )
+    win_rate_badge.short_description = 'درصد برد'
+    win_rate_badge.admin_order_field = 'win_rate'
+
+    def recalculate_rankings(self, request, queryset):
+        """Recalculate rankings for selected entries"""
+        from .tasks import calculate_tournament_rankings
+
+        tournaments = set(queryset.values_list('tournament_id', flat=True))
+
+        for tournament_id in tournaments:
+            calculate_tournament_rankings.delay(tournament_id)
+
+        self.message_user(
+            request,
+            f'محاسبه مجدد رتبه‌بندی برای {len(tournaments)} تورنمنت در صف قرار گرفت.',
+            messages.SUCCESS
+        )
+    recalculate_rankings.short_description = 'محاسبه مجدد رتبه‌بندی'
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related('tournament', 'participant__user')

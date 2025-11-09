@@ -150,7 +150,39 @@ class Tournament(models.Model):
     
     # Featured
     is_featured = models.BooleanField('ویژه', default=False)
-    
+
+    # Clash Royale Integration
+    clash_royale_tournament_tag = models.CharField(
+        'تگ تورنمنت کلش رویال',
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text='مثال: #ABC123XYZ'
+    )
+    tournament_password = models.CharField(
+        'رمز تورنمنت',
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text='رمز تورنمنت کلش رویال برای اشتراک با بازیکنان'
+    )
+    auto_tracking_enabled = models.BooleanField(
+        'ردیابی خودکار فعال',
+        default=False,
+        help_text='فعال‌سازی دریافت خودکار battle logs از کلش رویال'
+    )
+    last_battle_sync_time = models.DateTimeField(
+        'آخرین زمان همگام‌سازی بازی‌ها',
+        null=True,
+        blank=True
+    )
+    tracking_started_at = models.DateTimeField(
+        'زمان شروع ردیابی',
+        null=True,
+        blank=True,
+        help_text='زمان شروع ردیابی بازی‌ها - معمولاً زمان شروع تورنمنت'
+    )
+
     # Meta
     created_by = models.ForeignKey(
         User,
@@ -524,3 +556,258 @@ class TournamentInvitation(models.Model):
             status='pending',
             expires_at__lt=timezone.now()
         ).update(status='expired')
+
+
+class PlayerBattleLog(models.Model):
+    """Store battle logs from Clash Royale API for tournament tracking"""
+
+    BATTLE_TYPE_CHOICES = [
+        ('tournament', 'تورنمنت'),
+        ('PvP', 'PvP'),
+        ('challenge', 'چلنج'),
+        ('friendly', 'دوستانه'),
+        ('other', 'سایر'),
+    ]
+
+    tournament = models.ForeignKey(
+        Tournament,
+        on_delete=models.CASCADE,
+        related_name='battle_logs',
+        verbose_name='تورنمنت'
+    )
+    participant = models.ForeignKey(
+        TournamentParticipant,
+        on_delete=models.CASCADE,
+        related_name='battle_logs',
+        verbose_name='شرکت‌کننده'
+    )
+
+    # Battle identification
+    battle_time = models.DateTimeField(
+        'زمان بازی',
+        db_index=True,
+        help_text='زمان بازی از API کلش رویال'
+    )
+    battle_type = models.CharField(
+        'نوع بازی',
+        max_length=20,
+        choices=BATTLE_TYPE_CHOICES,
+        default='tournament'
+    )
+    game_mode = models.CharField(
+        'حالت بازی',
+        max_length=50,
+        blank=True
+    )
+
+    # Player data
+    player_tag = models.CharField('تگ بازیکن', max_length=20)
+    player_name = models.CharField('نام بازیکن', max_length=100)
+    player_crowns = models.PositiveIntegerField('تاج بازیکن', default=0)
+    player_king_tower_hp = models.PositiveIntegerField(
+        'HP برج پادشاه بازیکن',
+        null=True,
+        blank=True
+    )
+    player_princess_towers_hp = models.JSONField(
+        'HP برج‌های پرنسس بازیکن',
+        default=list,
+        blank=True
+    )
+
+    # Opponent data
+    opponent_tag = models.CharField('تگ حریف', max_length=20)
+    opponent_name = models.CharField('نام حریف', max_length=100)
+    opponent_crowns = models.PositiveIntegerField('تاج حریف', default=0)
+    opponent_king_tower_hp = models.PositiveIntegerField(
+        'HP برج پادشاه حریف',
+        null=True,
+        blank=True
+    )
+    opponent_princess_towers_hp = models.JSONField(
+        'HP برج‌های پرنسس حریف',
+        default=list,
+        blank=True
+    )
+
+    # Result
+    is_winner = models.BooleanField('برنده', default=False)
+    is_draw = models.BooleanField('مساوی', default=False)
+
+    # Cards used
+    player_cards = models.JSONField(
+        'کارت‌های بازیکن',
+        default=list,
+        blank=True,
+        help_text='لیست کارت‌های استفاده شده'
+    )
+    opponent_cards = models.JSONField(
+        'کارت‌های حریف',
+        default=list,
+        blank=True
+    )
+
+    # Arena & Trophy
+    arena_name = models.CharField('نام آرنا', max_length=100, blank=True)
+    arena_id = models.PositiveIntegerField('شناسه آرنا', null=True, blank=True)
+
+    # Additional metadata from API
+    raw_battle_data = models.JSONField(
+        'داده خام بازی',
+        default=dict,
+        blank=True,
+        help_text='داده کامل از API برای آینده'
+    )
+
+    # Tracking
+    is_counted = models.BooleanField(
+        'محاسبه شده',
+        default=True,
+        help_text='آیا در رتبه‌بندی محاسبه شود'
+    )
+
+    created_at = models.DateTimeField('تاریخ ثبت', auto_now_add=True)
+
+    class Meta:
+        db_table = 'player_battle_logs'
+        verbose_name = 'لاگ بازی بازیکن'
+        verbose_name_plural = 'لاگ‌های بازی بازیکنان'
+        ordering = ['-battle_time']
+        unique_together = ['tournament', 'player_tag', 'battle_time', 'opponent_tag']
+        indexes = [
+            models.Index(fields=['tournament', 'participant', '-battle_time']),
+            models.Index(fields=['player_tag', '-battle_time']),
+            models.Index(fields=['tournament', 'is_counted']),
+            models.Index(fields=['battle_time']),
+        ]
+
+    def __str__(self):
+        result = "برد" if self.is_winner else "مساوی" if self.is_draw else "باخت"
+        return f"{self.player_name} vs {self.opponent_name} - {result} ({self.battle_time.strftime('%Y-%m-%d %H:%M')})"
+
+    @property
+    def crown_difference(self):
+        """Calculate crown difference"""
+        return self.player_crowns - self.opponent_crowns
+
+
+class TournamentRanking(models.Model):
+    """Real-time tournament rankings based on battle logs"""
+
+    tournament = models.ForeignKey(
+        Tournament,
+        on_delete=models.CASCADE,
+        related_name='rankings',
+        verbose_name='تورنمنت'
+    )
+    participant = models.ForeignKey(
+        TournamentParticipant,
+        on_delete=models.CASCADE,
+        related_name='rankings',
+        verbose_name='شرکت‌کننده'
+    )
+
+    # Ranking
+    rank = models.PositiveIntegerField('رتبه', db_index=True)
+
+    # Stats
+    total_battles = models.PositiveIntegerField('تعداد بازی', default=0)
+    total_wins = models.PositiveIntegerField('تعداد برد', default=0)
+    total_losses = models.PositiveIntegerField('تعداد باخت', default=0)
+    total_draws = models.PositiveIntegerField('تعداد مساوی', default=0)
+
+    total_crowns = models.PositiveIntegerField('مجموع تاج‌ها', default=0)
+    total_crowns_lost = models.PositiveIntegerField('مجموع تاج‌های از دست رفته', default=0)
+
+    # Win rate
+    win_rate = models.DecimalField(
+        'درصد برد',
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text='درصد برد (0-100)'
+    )
+
+    # Score calculation (can be customized)
+    score = models.PositiveIntegerField(
+        'امتیاز',
+        default=0,
+        help_text='امتیاز محاسبه شده برای رتبه‌بندی'
+    )
+
+    # Last battle
+    last_battle_time = models.DateTimeField(
+        'آخرین بازی',
+        null=True,
+        blank=True
+    )
+
+    # Timestamps
+    calculated_at = models.DateTimeField('زمان محاسبه', auto_now=True)
+
+    class Meta:
+        db_table = 'tournament_rankings'
+        verbose_name = 'رتبه‌بندی تورنمنت'
+        verbose_name_plural = 'رتبه‌بندی‌های تورنمنت'
+        unique_together = ['tournament', 'participant']
+        ordering = ['rank']
+        indexes = [
+            models.Index(fields=['tournament', 'rank']),
+            models.Index(fields=['tournament', '-score']),
+            models.Index(fields=['-score']),
+        ]
+
+    def __str__(self):
+        return f"#{self.rank} - {self.participant.user.username} در {self.tournament.title}"
+
+    def calculate_score(self):
+        """
+        Calculate score for ranking
+        Formula: (Wins * 3) + (Draws * 1) + (Total Crowns / 10)
+        """
+        win_points = self.total_wins * 3
+        draw_points = self.total_draws * 1
+        crown_bonus = self.total_crowns // 10  # Every 10 crowns = 1 bonus point
+
+        self.score = win_points + draw_points + crown_bonus
+        return self.score
+
+    def calculate_win_rate(self):
+        """Calculate win rate percentage"""
+        if self.total_battles == 0:
+            self.win_rate = 0
+        else:
+            self.win_rate = (self.total_wins / self.total_battles) * 100
+        return self.win_rate
+
+    def update_stats(self):
+        """Update all statistics from battle logs"""
+        battles = self.participant.battle_logs.filter(
+            tournament=self.tournament,
+            is_counted=True
+        )
+
+        self.total_battles = battles.count()
+        self.total_wins = battles.filter(is_winner=True).count()
+        self.total_draws = battles.filter(is_draw=True).count()
+        self.total_losses = self.total_battles - self.total_wins - self.total_draws
+
+        # Calculate crowns
+        from django.db.models import Sum
+        crown_stats = battles.aggregate(
+            total_crowns=Sum('player_crowns'),
+            total_crowns_lost=Sum('opponent_crowns')
+        )
+        self.total_crowns = crown_stats['total_crowns'] or 0
+        self.total_crowns_lost = crown_stats['total_crowns_lost'] or 0
+
+        # Get last battle time
+        last_battle = battles.order_by('-battle_time').first()
+        self.last_battle_time = last_battle.battle_time if last_battle else None
+
+        # Calculate derived stats
+        self.calculate_win_rate()
+        self.calculate_score()
+
+        self.save()
+        return True

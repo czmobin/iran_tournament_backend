@@ -8,12 +8,17 @@ from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
 
-from .models import Tournament, TournamentParticipant, TournamentInvitation
+from .models import (
+    Tournament, TournamentParticipant, TournamentInvitation,
+    PlayerBattleLog, TournamentRanking
+)
 from .serializers import (
     TournamentListSerializer, TournamentDetailSerializer,
     TournamentParticipantSerializer, TournamentRegistrationSerializer,
     TournamentInvitationSerializer, TournamentLeaderboardSerializer,
-    TournamentStatsSerializer
+    TournamentStatsSerializer, PlayerBattleLogSerializer,
+    PlayerBattleLogDetailSerializer, TournamentRankingSerializer,
+    TournamentBattleStatsSerializer
 )
 from .filters import TournamentFilter, ParticipantFilter
 from .pagination import TournamentPagination, ParticipantPagination
@@ -386,3 +391,121 @@ class TournamentInvitationViewSet(viewsets.ReadOnlyModelViewSet):
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+class PlayerBattleLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for player battle logs"""
+    serializer_class = PlayerBattleLogSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering_fields = ['battle_time', 'player_crowns', 'opponent_crowns']
+    ordering = ['-battle_time']
+
+    def get_queryset(self):
+        """Filter battle logs based on user permissions"""
+        user = self.request.user
+        queryset = PlayerBattleLog.objects.select_related(
+            'tournament', 'participant__user'
+        ).all()
+
+        # Filter by tournament slug if provided
+        tournament_slug = self.request.query_params.get('tournament')
+        if tournament_slug:
+            queryset = queryset.filter(tournament__slug=tournament_slug)
+
+        # Users can see their own battles or battles from tournaments they participate in
+        if not user.is_staff:
+            # Get tournaments user participates in
+            user_tournaments = Tournament.objects.filter(
+                participants__user=user,
+                participants__status='confirmed'
+            )
+            queryset = queryset.filter(
+                Q(participant__user=user) | Q(tournament__in=user_tournaments)
+            )
+
+        return queryset
+
+    def get_serializer_class(self):
+        """Use detailed serializer for single object"""
+        if self.action == 'retrieve':
+            return PlayerBattleLogDetailSerializer
+        return PlayerBattleLogSerializer
+
+    @action(detail=False, methods=['get'], url_path='my-battles')
+    def my_battles(self, request):
+        """Get current user's battle logs"""
+        participant_battles = PlayerBattleLog.objects.filter(
+            participant__user=request.user
+        ).select_related('tournament', 'participant').order_by('-battle_time')
+
+        # Filter by tournament if provided
+        tournament_slug = request.query_params.get('tournament')
+        if tournament_slug:
+            participant_battles = participant_battles.filter(
+                tournament__slug=tournament_slug
+            )
+
+        page = self.paginate_queryset(participant_battles)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(participant_battles, many=True)
+        return Response(serializer.data)
+
+
+class TournamentRankingViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for tournament rankings/leaderboard"""
+    serializer_class = TournamentRankingSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering_fields = ['rank', 'score', 'total_wins', 'total_battles']
+    ordering = ['rank']
+
+    def get_queryset(self):
+        """Get rankings for a specific tournament"""
+        queryset = TournamentRanking.objects.select_related(
+            'tournament', 'participant__user'
+        ).all()
+
+        # Filter by tournament slug if provided
+        tournament_slug = self.request.query_params.get('tournament')
+        if tournament_slug:
+            queryset = queryset.filter(tournament__slug=tournament_slug)
+
+        return queryset
+
+    @action(detail=False, methods=['get'], url_path='tournament/(?P<tournament_slug>[^/.]+)')
+    def tournament_leaderboard(self, request, tournament_slug=None):
+        """Get leaderboard for a specific tournament"""
+        tournament = get_object_or_404(Tournament, slug=tournament_slug)
+
+        rankings = TournamentRanking.objects.filter(
+            tournament=tournament
+        ).select_related('participant__user').order_by('rank')
+
+        serializer = self.get_serializer(rankings, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='my-ranking')
+    def my_ranking(self, request):
+        """Get current user's ranking in tournaments"""
+        if not request.user.is_authenticated:
+            return Response(
+                {'error': 'احراز هویت لازم است'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        # Get user's tournament participations
+        participations = TournamentParticipant.objects.filter(
+            user=request.user,
+            status='confirmed'
+        ).select_related('tournament')
+
+        rankings = TournamentRanking.objects.filter(
+            participant__in=participations
+        ).select_related('tournament', 'participant__user').order_by('-calculated_at')
+
+        serializer = self.get_serializer(rankings, many=True)
+        return Response(serializer.data)
