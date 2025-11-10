@@ -71,6 +71,9 @@
         updatePrizeDistributionDisplay(prizeAfterCommission, bestOf);
     }
 
+    // Expose function to global scope for button access
+    window.updatePrizeCalculations = updatePrizeCalculations;
+
     // Update total prize pool display
     function updatePrizePoolDisplay(total) {
         const valueSpan = document.getElementById('prize_pool_value');

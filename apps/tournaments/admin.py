@@ -57,6 +57,7 @@ class TournamentAdmin(admin.ModelAdmin):
         'created_at', 'updated_at',
         'banner_preview', 'last_battle_sync_time',
         'tracking_started_at', 'auto_tracking_enabled',
+        'prize_calculator_button',
         'calculated_prize_pool', 'calculated_prize_after_commission',
         'calculated_prize_distribution'
     )
@@ -85,6 +86,7 @@ class TournamentAdmin(admin.ModelAdmin):
             'fields': (
                 'entry_fee', 'prize_pool',
                 'platform_commission',
+                'prize_calculator_button',
                 'calculated_prize_pool',
                 'calculated_prize_after_commission',
                 'calculated_prize_distribution'
@@ -141,6 +143,43 @@ class TournamentAdmin(admin.ModelAdmin):
         'make_featured'
     ]
     
+    def prize_calculator_button(self, obj):
+        """Display calculate button to manually trigger calculations"""
+        return format_html(
+            '<button type="button" id="calculate_prizes_btn" '
+            'style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); '
+            'color: white; padding: 12px 24px; border: none; border-radius: 6px; '
+            'font-size: 14px; font-weight: bold; cursor: pointer; '
+            'box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: all 0.3s ease;">'
+            '🧮 محاسبه جوایز'
+            '</button>'
+            '<script>'
+            'document.addEventListener("DOMContentLoaded", function() {{'
+            '  const btn = document.getElementById("calculate_prizes_btn");'
+            '  if (btn) {{'
+            '    btn.addEventListener("click", function() {{'
+            '      // Trigger calculation'
+            '      if (window.updatePrizeCalculations) {{'
+            '        window.updatePrizeCalculations();'
+            '      }}'
+            '      // Visual feedback'
+            '      this.style.transform = "scale(0.95)";'
+            '      setTimeout(() => {{ this.style.transform = "scale(1)"; }}, 100);'
+            '    }});'
+            '    btn.addEventListener("mouseenter", function() {{'
+            '      this.style.transform = "translateY(-2px)";'
+            '      this.style.boxShadow = "0 6px 12px rgba(0,0,0,0.15)";'
+            '    }});'
+            '    btn.addEventListener("mouseleave", function() {{'
+            '      this.style.transform = "translateY(0)";'
+            '      this.style.boxShadow = "0 4px 6px rgba(0,0,0,0.1)";'
+            '    }});'
+            '  }}'
+            '}});'
+            '</script>'
+        )
+    prize_calculator_button.short_description = '⚡ محاسبه‌گر'
+
     def calculated_prize_pool(self, obj):
         """Display calculated total prize pool"""
         # محاسبه اولیه اگر مقادیر موجود باشند
@@ -420,7 +459,12 @@ class TournamentAdmin(admin.ModelAdmin):
         """
         readonly = list(super().get_readonly_fields(request, obj))
         # اطمینان از اینکه فیلدهای محاسبه شده همیشه موجود هستند
-        calc_fields = ['calculated_prize_pool', 'calculated_prize_after_commission', 'calculated_prize_distribution']
+        calc_fields = [
+            'prize_calculator_button',
+            'calculated_prize_pool',
+            'calculated_prize_after_commission',
+            'calculated_prize_distribution'
+        ]
         for field in calc_fields:
             if field not in readonly:
                 readonly.append(field)
