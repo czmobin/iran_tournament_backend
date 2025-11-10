@@ -73,34 +73,33 @@
 
     // Update total prize pool display
     function updatePrizePoolDisplay(total) {
-        const container = document.getElementById('calc_prize_pool');
-        if (container) {
-            container.innerHTML = `
-                <strong style="color: #2e7d32; font-size: 16px;">💰 ${formatNumber(total)} تومان</strong>
-                <br><small style="color: #666;">جایزه کل محاسبه شده</small>
-            `;
+        const valueSpan = document.getElementById('prize_pool_value');
+        if (valueSpan) {
+            valueSpan.textContent = formatNumber(total);
         }
     }
 
     // Update prize after commission display
     function updatePrizeAfterCommissionDisplay(afterCommission, commissionAmount) {
-        const container = document.getElementById('calc_after_commission');
-        if (container) {
-            container.innerHTML = `
-                <strong style="color: #1565c0; font-size: 16px;">💵 ${formatNumber(afterCommission)} تومان</strong>
-                <br><small style="color: #666;">پس از کسر کمیسیون (${formatNumber(commissionAmount)} تومان)</small>
-            `;
+        const afterCommissionSpan = document.getElementById('after_commission_value');
+        const commissionSpan = document.getElementById('commission_value');
+
+        if (afterCommissionSpan) {
+            afterCommissionSpan.textContent = formatNumber(afterCommission);
+        }
+        if (commissionSpan) {
+            commissionSpan.textContent = formatNumber(commissionAmount);
         }
     }
 
     // Update prize distribution display
     function updatePrizeDistributionDisplay(totalAfterCommission, bestOf) {
-        const container = document.getElementById('calc_distribution');
+        const container = document.getElementById('distribution_items');
         if (!container) return;
 
         const distribution = getPrizeDistribution(bestOf);
 
-        let html = '<strong style="color: #e65100; font-size: 14px;">🏆 توزیع جوایز نفرات برتر:</strong><br><br>';
+        let html = '';
 
         distribution.forEach(([rank, percentage]) => {
             const prizeAmount = (totalAfterCommission * percentage) / 100;
