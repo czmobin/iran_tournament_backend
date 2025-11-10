@@ -1,0 +1,81 @@
+/**
+ * Custom styles for Tournament Admin Prize Calculator
+ */
+
+/* Calculated prize fields styling */
+#calc_prize_pool,
+#calc_after_commission,
+#calc_distribution {
+    margin: 10px 0;
+    padding: 10px;
+    border-radius: 5px;
+    transition: all 0.3s ease;
+}
+
+#calc_prize_pool {
+    background-color: #e8f5e9;
+    border: 2px solid #4caf50;
+}
+
+#calc_after_commission {
+    background-color: #e3f2fd;
+    border: 2px solid #2196f3;
+}
+
+#calc_distribution {
+    background-color: #fff3e0;
+    border: 2px solid #ff9800;
+}
+
+/* Hover effects for calculated fields */
+#calc_prize_pool:hover,
+#calc_after_commission:hover,
+#calc_distribution:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transform: translateY(-2px);
+}
+
+/* Responsive design for mobile */
+@media (max-width: 768px) {
+    #calc_prize_pool strong,
+    #calc_after_commission strong,
+    #calc_distribution strong {
+        font-size: 14px !important;
+    }
+}
+
+/* Animation for value updates */
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.02);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+.prize-update {
+    animation: pulse 0.3s ease;
+}
+
+/* Style for readonly field rows containing calculations */
+.form-row.field-calculated_prize_pool,
+.form-row.field-calculated_prize_after_commission,
+.form-row.field-calculated_prize_distribution {
+    background-color: #fafafa;
+    padding: 15px;
+    margin: 10px 0;
+    border-radius: 5px;
+}
+
+/* Label styling for calculated fields */
+.form-row.field-calculated_prize_pool label,
+.form-row.field-calculated_prize_after_commission label,
+.form-row.field-calculated_prize_distribution label {
+    font-weight: bold;
+    color: #333;
+    font-size: 14px;
+}
