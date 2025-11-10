@@ -56,7 +56,9 @@ class TournamentAdmin(admin.ModelAdmin):
         'slug', 'total_participants', 'total_matches',
         'created_at', 'updated_at',
         'banner_preview', 'last_battle_sync_time',
-        'tracking_started_at', 'auto_tracking_enabled'
+        'tracking_started_at', 'auto_tracking_enabled',
+        'calculated_prize_pool', 'calculated_prize_after_commission',
+        'calculated_prize_distribution'
     )
     
     # حذف autocomplete_fields چون created_by رو readonly کردیم
@@ -82,7 +84,10 @@ class TournamentAdmin(admin.ModelAdmin):
         ('تنظیمات مالی', {
             'fields': (
                 'entry_fee', 'prize_pool',
-                'platform_commission'
+                'platform_commission',
+                'calculated_prize_pool',
+                'calculated_prize_after_commission',
+                'calculated_prize_distribution'
             )
         }),
         ('تاریخ‌ها', {
@@ -136,6 +141,89 @@ class TournamentAdmin(admin.ModelAdmin):
         'make_featured'
     ]
     
+    def calculated_prize_pool(self, obj):
+        """Display calculated total prize pool"""
+        if obj.entry_fee and obj.max_participants:
+            total = obj.entry_fee * obj.max_participants
+            formatted = f'{int(total):,}'.replace(',', '،')
+            return format_html(
+                '<div id="calc_prize_pool" style="background-color: #e8f5e9; padding: 10px; border-radius: 5px; border: 2px solid #4caf50;">'
+                '<strong style="color: #2e7d32; font-size: 16px;">💰 {} تومان</strong>'
+                '<br><small style="color: #666;">جایزه کل محاسبه شده</small>'
+                '</div>',
+                formatted
+            )
+        return format_html('<em style="color: #999;">—</em>')
+    calculated_prize_pool.short_description = 'جایزه کل محاسبه شده'
+
+    def calculated_prize_after_commission(self, obj):
+        """Display prize pool after platform commission"""
+        if obj.entry_fee and obj.max_participants and obj.platform_commission is not None:
+            total = obj.entry_fee * obj.max_participants
+            commission_amount = (total * obj.platform_commission) / 100
+            after_commission = total - commission_amount
+
+            formatted_total = f'{int(after_commission):,}'.replace(',', '،')
+            formatted_commission = f'{int(commission_amount):,}'.replace(',', '،')
+
+            return format_html(
+                '<div id="calc_after_commission" style="background-color: #e3f2fd; padding: 10px; border-radius: 5px; border: 2px solid #2196f3;">'
+                '<strong style="color: #1565c0; font-size: 16px;">💵 {} تومان</strong>'
+                '<br><small style="color: #666;">پس از کسر کمیسیون ({} تومان)</small>'
+                '</div>',
+                formatted_total, formatted_commission
+            )
+        return format_html('<em style="color: #999;">—</em>')
+    calculated_prize_after_commission.short_description = 'جایزه پس از کمیسیون'
+
+    def calculated_prize_distribution(self, obj):
+        """Display prize distribution for top players"""
+        if obj.entry_fee and obj.max_participants and obj.platform_commission is not None and obj.best_of:
+            total = obj.entry_fee * obj.max_participants
+            after_commission = total - (total * obj.platform_commission / 100)
+
+            # Prize distribution percentages based on best_of
+            distributions = {
+                1: [(1, 100)],
+                2: [(1, 60), (2, 40)],
+                3: [(1, 50), (2, 30), (3, 20)],
+                4: [(1, 40), (2, 30), (3, 20), (4, 10)],
+                5: [(1, 40), (2, 25), (3, 15), (4, 12), (5, 8)],
+                6: [(1, 35), (2, 25), (3, 15), (4, 12), (5, 8), (6, 5)],
+                7: [(1, 35), (2, 22), (3, 15), (4, 11), (5, 8), (6, 5), (7, 4)],
+                8: [(1, 35), (2, 20), (3, 13), (4, 10), (5, 8), (6, 6), (7, 4), (8, 4)],
+            }
+
+            # Default distribution for more than 8
+            if obj.best_of > 8:
+                distributions[obj.best_of] = [(i, 100/obj.best_of) for i in range(1, obj.best_of + 1)]
+
+            distribution = distributions.get(obj.best_of, distributions[8])
+
+            html = '<div id="calc_distribution" style="background-color: #fff3e0; padding: 10px; border-radius: 5px; border: 2px solid #ff9800;">'
+            html += '<strong style="color: #e65100; font-size: 14px;">🏆 توزیع جوایز نفرات برتر:</strong><br><br>'
+
+            medals = {1: '🥇', 2: '🥈', 3: '🥉'}
+
+            for rank, percentage in distribution:
+                prize_amount = (after_commission * percentage) / 100
+                formatted_prize = f'{int(prize_amount):,}'.replace(',', '،')
+                medal = medals.get(rank, '🏅')
+
+                html += format_html(
+                    '<div style="margin: 5px 0; padding: 5px; background: white; border-radius: 3px;">'
+                    '<strong>{} نفر {}: </strong>'
+                    '<span style="color: #2e7d32; font-weight: bold;">{} تومان</span> '
+                    '<small style="color: #666;">({}%)</small>'
+                    '</div>',
+                    medal, rank, formatted_prize, int(percentage)
+                )
+
+            html += '</div>'
+            return format_html(html)
+        return format_html('<em style="color: #999;">—</em>')
+    calculated_prize_distribution.short_description = 'توزیع جوایز'
+
     def save_model(self, request, obj, form, change):
         """Auto-set created_by on create"""
         if not change:  # فقط موقع ساخت
@@ -321,6 +409,12 @@ class TournamentAdmin(admin.ModelAdmin):
         """Optimize queryset"""
         qs = super().get_queryset(request)
         return qs.select_related('created_by').prefetch_related('participants')
+
+    class Media:
+        js = ('admin/js/tournament_prize_calculator.js',)
+        css = {
+            'all': ('admin/css/tournament_admin.css',)
+        }
 
 
 @admin.register(TournamentParticipant)
