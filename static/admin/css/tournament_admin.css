@@ -79,3 +79,36 @@
     color: #333;
     font-size: 14px;
 }
+
+/* Calculate button styling */
+#calculate_prizes_btn {
+    transition: all 0.3s ease !important;
+}
+
+#calculate_prizes_btn:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 12px rgba(0,0,0,0.15) !important;
+}
+
+#calculate_prizes_btn:active {
+    transform: scale(0.95) !important;
+}
+
+/* Styling for calculator button row */
+.form-row.field-prize_calculator_button {
+    background-color: #f8f9fa;
+    padding: 15px;
+    margin: 15px 0;
+    border-radius: 8px;
+    border: 2px dashed #667eea;
+    text-align: center;
+}
+
+.form-row.field-prize_calculator_button label {
+    display: none;
+}
+
+.form-row.field-prize_calculator_button .readonly {
+    width: 100%;
+    text-align: center;
+}
