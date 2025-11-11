@@ -10,7 +10,7 @@ from .tasks import send_sms_otp
 from .serializers import (
     UserSerializer, RegisterSerializer, LoginSerializer,
     ChangePasswordSerializer, UserProfileSerializer,
-    UpdateProfileSerializer
+    UpdateProfileSerializer, CompleteRegistrationSerializer
 )
 
 User = get_user_model()
@@ -219,8 +219,14 @@ class UploadProfilePictureView(APIView):
 
 
 class SendOTPView(APIView):
+    """
+    Send OTP to phone number
+    POST /api/auth/send-otp/
+    Body: {"phone_number": "09123456789"}
+    Response: {"user_exists": true/false, "message": "..."}
+    """
     permission_classes = [permissions.AllowAny]
-    
+
     def post(self, request):
         phone_number = request.data.get("phone_number")
 
@@ -229,24 +235,42 @@ class SendOTPView(APIView):
                 'error': "شماره تلفن وارد نشده است."
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        # Validate phone format
+        import re
+        if not re.match(r'^09\d{9}$', phone_number):
+            return Response({
+                'error': "شماره تلفن باید به فرمت 09123456789 باشد."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         if cache.get(f"otp_cooldown_{phone_number}"):
             return Response({
                 'error': "لطفاً چند ثانیه صبر کنید و دوباره تلاش کنید."
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        # Check if user exists
+        user_exists = User.objects.filter(phone_number=phone_number).exists()
+
         task = send_sms_otp.delay(phone_number)
         cache.set(f"otp_task_{phone_number}", task.id, timeout=120)
         cache.set(f"otp_cooldown_{phone_number}", True, timeout=5)
 
-
         return Response({
             'task_id': task.id,
-            'message': 'کد ورود در حال ارسال است، لطفاً چند لحظه صبر کنید.'
+            'user_exists': user_exists,
+            'message': 'کد تایید به شماره شما ارسال شد.' if user_exists else 'کد تایید برای ثبت‌نام ارسال شد.'
         })
 
-class ValidateOTPView(APIView):
+class VerifyOTPAndLoginView(APIView):
+    """
+    Verify OTP and login/register
+    POST /api/auth/verify-otp/
+    Body: {"phone_number": "09123456789", "otp": "123456"}
+    Response:
+        - If user exists: {"action": "login", "tokens": {...}, "user": {...}}
+        - If user doesn't exist: {"action": "register", "message": "..."}
+    """
     permission_classes = [permissions.AllowAny]
-    
+
     def post(self, request):
         phone_number = request.data.get("phone_number")
         otp = request.data.get("otp")
@@ -260,58 +284,96 @@ class ValidateOTPView(APIView):
         if not task_id:
             return Response({
                 'error': "کد OTP یافت نشد. لطفاً مجدداً درخواست دهید."
-                }, status=status.HTTP_400_BAD_REQUEST)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         from celery.result import AsyncResult
         task_result = AsyncResult(task_id)
 
         if not task_result.ready():
             return Response({
                 'error': "کد هنوز آماده نیست، لطفاً چند لحظه دیگر دوباره امتحان کنید."
-                }, status=status.HTTP_400_BAD_REQUEST)
-        
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         otp_response = task_result.result
 
         if not otp_response or otp_response["status_code"] != 200:
             return Response({
                 'error': "خطایی در SMS Provider رخ داده است."
-                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-                
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
         otp_code = otp_response["response"]["code"]
 
         if otp_code != otp:
             return Response({
                 'error': "کد OTP نادرست است."
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-        cache.set(f"otp_valid_{phone_number}", True, timeout=300)
-
-        return Response({
-            'is_valid': True,
-            'message': 'کد صحیح است.'
-        })
-
-class VerifyPhoneView(APIView):
-    permission_classes = [permissions.AllowAny]
-    
-    def post(self, request):
-        phone_number = request.data.get("phone_number")
-
-        if not phone_number:
-            return Response({
-                'error': "شماره تلفن وارد نشده است."
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        task_id = cache.get(f"otp_valid_{phone_number}")
-        if not task_id:
-            return Response({
-                'error': "کد OTP یافت نشد. لطفاً مجدداً درخواست دهید."
-                }, status=status.HTTP_400_BAD_REQUEST)
+        # OTP is valid - now check if user exists
+        try:
+            user = User.objects.get(phone_number=phone_number)
 
-        user = User.objects.get(phone_number=phone_number)
-        user.is_verified = True
-        user.save()
+            # User exists - log them in
+            user.is_verified = True
+            user.save(update_fields=['is_verified'])
+
+            # Generate tokens
+            refresh = RefreshToken.for_user(user)
+
+            # Clear OTP cache
+            cache.delete(f"otp_task_{phone_number}")
+
+            return Response({
+                'action': 'login',
+                'user': UserSerializer(user).data,
+                'tokens': {
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
+                },
+                'message': 'ورود با موفقیت انجام شد.'
+            }, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            # User doesn't exist - mark OTP as valid for registration
+            cache.set(f"otp_verified_{phone_number}", True, timeout=600)  # 10 minutes
+            cache.delete(f"otp_task_{phone_number}")
+
+            return Response({
+                'action': 'register',
+                'message': 'لطفاً اطلاعات ثبت‌نام را تکمیل کنید.',
+                'phone_number': phone_number
+            }, status=status.HTTP_200_OK)
+
+class CompleteRegistrationView(generics.CreateAPIView):
+    """
+    Complete registration after OTP verification
+    POST /api/auth/complete-registration/
+    Body: {
+        "phone_number": "09123456789",
+        "username": "username",
+        "first_name": "نام",
+        "last_name": "نام خانوادگی",
+        "email": "email@example.com",  // optional
+        "clash_royale_tag": "#ABC123"  // optional
+    }
+    Response: {"user": {...}, "tokens": {...}, "message": "..."}
+    """
+    queryset = User.objects.all()
+    serializer_class = CompleteRegistrationSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        # Generate tokens
+        refresh = RefreshToken.for_user(user)
 
         return Response({
-            'is_verified': True,
-            'message': 'کد صحیح است.'
-        })
+            'user': UserSerializer(user).data,
+            'tokens': {
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+            },
+            'message': 'ثبت‌نام با موفقیت انجام شد.'
+        }, status=status.HTTP_201_CREATED)

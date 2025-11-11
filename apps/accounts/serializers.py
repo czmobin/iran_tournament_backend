@@ -213,44 +213,144 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 class UpdateProfileSerializer(serializers.ModelSerializer):
     """Serializer for updating user profile"""
-    
+
     class Meta:
         model = User
         fields = [
             'first_name', 'last_name', 'phone_number',
             'clash_royale_tag', 'profile_picture'
         ]
-    
+
     def validate_phone_number(self, value):
         if value:
             # Check format
             import re
             if not re.match(r'^09\d{9}$', value):
                 raise serializers.ValidationError("شماره موبایل باید به فرمت 09123456789 باشد")
-            
+
             # Check uniqueness (exclude current user)
             user = self.context['request'].user
             if User.objects.exclude(id=user.id).filter(phone_number=value).exists():
                 raise serializers.ValidationError("این شماره موبایل قبلاً استفاده شده است")
-        
+
         return value
-    
+
     def validate_clash_royale_tag(self, value):
         if value:
             # Remove # if exists
             value = value.replace('#', '')
-            
+
             # Check format (letters and numbers)
             import re
             if not re.match(r'^[A-Z0-9]{3,15}$', value.upper()):
                 raise serializers.ValidationError("تگ کلش رویال نامعتبر است")
-            
+
             # Add # back
             value = f"#{value.upper()}"
-            
+
             # Check uniqueness
             user = self.context['request'].user
             if User.objects.exclude(id=user.id).filter(clash_royale_tag=value).exists():
                 raise serializers.ValidationError("این تگ قبلاً استفاده شده است")
-        
+
         return value
+
+
+class CompleteRegistrationSerializer(serializers.ModelSerializer):
+    """Serializer for completing registration after OTP verification"""
+
+    class Meta:
+        model = User
+        fields = [
+            'phone_number', 'username', 'first_name', 'last_name',
+            'email', 'clash_royale_tag'
+        ]
+        extra_kwargs = {
+            'phone_number': {'required': True},
+            'username': {'required': True},
+            'first_name': {'required': True},
+            'last_name': {'required': True},
+            'email': {'required': False},
+            'clash_royale_tag': {'required': False}
+        }
+
+    def validate_phone_number(self, value):
+        """Verify phone number was OTP verified and doesn't exist"""
+        from django.core.cache import cache
+
+        # Check if OTP was verified for this phone
+        if not cache.get(f"otp_verified_{value}"):
+            raise serializers.ValidationError("شماره تلفن تایید نشده است. لطفاً ابتدا OTP را تایید کنید.")
+
+        # Check phone doesn't already exist
+        if User.objects.filter(phone_number=value).exists():
+            raise serializers.ValidationError("این شماره تلفن قبلاً ثبت شده است.")
+
+        return value
+
+    def validate_username(self, value):
+        """Check username is unique"""
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("این نام کاربری قبلاً استفاده شده است.")
+        return value
+
+    def validate_email(self, value):
+        """Check email format and uniqueness if provided"""
+        if value:
+            if User.objects.filter(email=value).exists():
+                raise serializers.ValidationError("این ایمیل قبلاً استفاده شده است.")
+        return value
+
+    def validate_clash_royale_tag(self, value):
+        """Validate and format Clash Royale tag if provided"""
+        if value:
+            # Remove # if exists
+            value = value.replace('#', '')
+
+            # Check format (letters and numbers)
+            import re
+            if not re.match(r'^[A-Z0-9]{3,15}$', value.upper()):
+                raise serializers.ValidationError("تگ کلش رویال نامعتبر است")
+
+            # Add # back
+            value = f"#{value.upper()}"
+
+            # Check uniqueness
+            if User.objects.filter(clash_royale_tag=value).exists():
+                raise serializers.ValidationError("این تگ قبلاً استفاده شده است")
+
+        return value
+
+    def create(self, validated_data):
+        """Create user after OTP verification"""
+        from django.core.cache import cache
+
+        phone_number = validated_data['phone_number']
+
+        # Create user without password (OTP-based authentication)
+        user = User.objects.create(
+            username=validated_data['username'],
+            phone_number=phone_number,
+            first_name=validated_data['first_name'],
+            last_name=validated_data['last_name'],
+            email=validated_data.get('email', ''),
+            clash_royale_tag=validated_data.get('clash_royale_tag', None),
+            is_verified=True  # Already verified via OTP
+        )
+
+        # Set unusable password (user will login via OTP)
+        user.set_unusable_password()
+        user.save()
+
+        # Create user stats
+        from .models import UserStats
+        UserStats.objects.create(user=user)
+
+        # Create notification preferences
+        from apps.notifications.models import NotificationPreference
+        NotificationPreference.objects.create(user=user)
+
+        # Clear OTP verification cache
+        cache.delete(f"otp_verified_{phone_number}")
+
+        return user
