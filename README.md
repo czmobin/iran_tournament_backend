@@ -59,8 +59,9 @@
 - ✅ مدیریت کمیسیون پلتفرم
 
 ### 👥 مدیریت کاربران
-- ✅ احراز هویت با JWT Token
-- ✅ تأیید ایمیل و شماره موبایل
+- ✅ احراز هویت با OTP (کد یکبار مصرف) و JWT Token
+- ✅ لاگین/رجیستر فقط با شماره موبایل
+- ✅ تأیید خودکار شماره موبایل با OTP
 - ✅ پروفایل کاربری با تگ Clash Royale
 - ✅ آمار و رتبه‌بندی کاربران
 - ✅ تاریخچه تورنمنت‌ها و مسابقات
@@ -630,11 +631,18 @@ CLASH_ROYALE_API_KEY=eyJ0eXAiOiJKV1QiLCJhbGc...
 کاربران سیستم با اطلاعات پروفایل و تگ Clash Royale
 
 **فیلدهای مهم:**
-- `phone_number` - شماره موبایل (unique)
-- `email` - ایمیل (unique)
+- `phone_number` - شماره موبایل (required, unique) ⭐
+- `email` - ایمیل (optional)
+- `username` - نام کاربری (unique)
+- `first_name`, `last_name` - نام و نام خانوادگی
 - `clash_royale_tag` - تگ Clash Royale (#ABC123)
-- `is_verified` - وضعیت تأیید شده
+- `is_verified` - وضعیت تأیید شده (با OTP)
 - `profile_picture` - تصویر پروفایل
+- `wallet_balance` - موجودی کیف پول
+
+**⚠️ نکته مهم:**
+- احراز هویت فقط با شماره موبایل و OTP انجام می‌شود
+- کاربران با `set_unusable_password()` ایجاد می‌شوند (بدون رمز عبور)
 
 #### **UserStats** (`accounts.UserStats`)
 آمار عملکرد کاربران در تورنمنت‌ها
@@ -789,38 +797,284 @@ score = (total_wins * 3) + (total_draws * 1) + (total_crowns // 10)
 http://localhost:8000/api/
 ```
 
-### 🔐 Authentication
+### 🔐 Authentication (OTP-based)
 
-#### ثبت‌نام
+سیستم احراز هویت این پلتفرم بر اساس **شماره موبایل و OTP (کد یکبار مصرف)** است.
+
+#### 📝 فلوی کامل لاگین/رجیستر
+
+```
+کاربر شماره موبایل را وارد می‌کند
+    ↓
+سیستم OTP ارسال می‌کند
+    ↓
+کاربر کد OTP را وارد می‌کند
+    ↓
+اگر شماره موجود بود → لاگین (توکن‌ها برگشت داده می‌شود)
+اگر شماره جدید بود → فرم تکمیل اطلاعات (username, نام و...)
+    ↓
+ثبت‌نام کامل می‌شود و توکن‌ها برگشت داده می‌شوند
+```
+
+---
+
+#### 1️⃣ ارسال OTP
 ```http
-POST /api/auth/register/
+POST /api/auth/send-otp/
 Content-Type: application/json
 
 {
-  "username": "player1",
-  "email": "player1@example.com",
-  "phone_number": "09123456789",
-  "password": "SecurePass123",
-  "password_confirm": "SecurePass123",
-  "clash_royale_tag": "#ABC123XYZ"
+  "phone_number": "09123456789"
 }
 ```
 
-#### ورود
-```http
-POST /api/auth/login/
-
+**Response:**
+```json
 {
-  "username": "player1",
-  "password": "SecurePass123"
+  "task_id": "abc-123-def",
+  "user_exists": true,
+  "message": "کد تایید به شماره شما ارسال شد."
 }
+```
 
-Response:
+**یا اگر کاربر جدید باشد:**
+```json
 {
-  "access": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+  "task_id": "abc-123-def",
+  "user_exists": false,
+  "message": "کد تایید برای ثبت‌نام ارسال شد."
+}
+```
+
+**Errors:**
+- `400 Bad Request`: شماره تلفن وارد نشده / فرمت اشتباه
+- `429 Too Many Requests`: باید 5 ثانیه صبر کنید
+
+**⏱️ محدودیت‌ها:**
+- Cooldown: 5 ثانیه بین هر درخواست
+- OTP timeout: 2 دقیقه
+
+---
+
+#### 2️⃣ تایید OTP و لاگین/رجیستر
+```http
+POST /api/auth/verify-otp/
+Content-Type: application/json
+
+{
+  "phone_number": "09123456789",
+  "otp": "123456"
+}
+```
+
+**Response (کاربر موجود - لاگین):**
+```json
+{
+  "action": "login",
+  "user": {
+    "id": 42,
+    "username": "player1",
+    "phone_number": "09123456789",
+    "email": "player@example.com",
+    "first_name": "علی",
+    "last_name": "احمدی",
+    "clash_royale_tag": "#ABC123",
+    "is_verified": true,
+    "wallet_balance": "50000.00",
+    "created_at": "2025-11-01T10:00:00Z"
+  },
+  "tokens": {
+    "access": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGc..."
+  },
+  "message": "ورود با موفقیت انجام شد."
+}
+```
+
+**Response (کاربر جدید - نیاز به تکمیل اطلاعات):**
+```json
+{
+  "action": "register",
+  "message": "لطفاً اطلاعات ثبت‌نام را تکمیل کنید.",
+  "phone_number": "09123456789"
+}
+```
+
+**Errors:**
+- `400 Bad Request`: شماره یا OTP وارد نشده / OTP نادرست
+- `503 Service Unavailable`: خطا در SMS Provider
+
+**⏱️ زمان اعتبار OTP:**
+- بعد از تایید OTP، 10 دقیقه فرصت برای تکمیل ثبت‌نام
+
+---
+
+#### 3️⃣ تکمیل ثبت‌نام (فقط برای کاربران جدید)
+```http
+POST /api/auth/complete-registration/
+Content-Type: application/json
+
+{
+  "phone_number": "09123456789",
+  "username": "player1",
+  "first_name": "علی",
+  "last_name": "احمدی",
+  "email": "ali@example.com",          // اختیاری
+  "clash_royale_tag": "#ABC123"        // اختیاری
+}
+```
+
+**Response:**
+```json
+{
+  "user": {
+    "id": 43,
+    "username": "player1",
+    "phone_number": "09123456789",
+    "email": "ali@example.com",
+    "first_name": "علی",
+    "last_name": "احمدی",
+    "clash_royale_tag": "#ABC123",
+    "is_verified": true,
+    "wallet_balance": "0.00",
+    "created_at": "2025-11-09T15:30:00Z"
+  },
+  "tokens": {
+    "access": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGc..."
+  },
+  "message": "ثبت‌نام با موفقیت انجام شد."
+}
+```
+
+**Validation:**
+- `phone_number`: الزامی - باید OTP تایید شده باشد
+- `username`: الزامی - یونیک
+- `first_name`: الزامی
+- `last_name`: الزامی
+- `email`: اختیاری - اگر وارد شود باید یونیک باشد
+- `clash_royale_tag`: اختیاری - فرمت: `#ABC123`
+
+**Errors:**
+- `400 Bad Request`: فیلدهای الزامی وارد نشده
+- `400 Bad Request`: OTP تایید نشده (10 دقیقه گذشته)
+- `400 Bad Request`: username یا email تکراری است
+
+---
+
+#### 4️⃣ Refresh Token
+```http
+POST /api/auth/token/refresh/
+Content-Type: application/json
+
+{
   "refresh": "eyJ0eXAiOiJKV1QiLCJhbGc..."
 }
 ```
+
+**Response:**
+```json
+{
+  "access": "eyJ0eXAiOiJKV1QiLCJhbGc..."
+}
+```
+
+---
+
+#### 5️⃣ خروج (Logout)
+```http
+POST /api/auth/logout/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "refresh": "eyJ0eXAiOiJKV1QiLCJhbGc..."
+}
+```
+
+**Response:**
+```json
+{
+  "message": "خروج با موفقیت انجام شد."
+}
+```
+
+---
+
+#### 🔑 استفاده از Token در درخواست‌ها
+
+بعد از لاگین/رجیستر، `access` token را در header درخواست‌ها قرار دهید:
+
+```http
+GET /api/tournaments/
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGc...
+```
+
+**⏱️ زمان اعتبار توکن‌ها:**
+- Access Token: 1 ساعت
+- Refresh Token: 7 روز
+
+---
+
+#### 📱 دریافت پروفایل کاربر
+```http
+GET /api/auth/profile/
+Authorization: Bearer {access_token}
+```
+
+**Response:**
+```json
+{
+  "id": 42,
+  "username": "player1",
+  "email": "ali@example.com",
+  "phone_number": "09123456789",
+  "first_name": "علی",
+  "last_name": "احمدی",
+  "clash_royale_tag": "#ABC123",
+  "profile_picture": "/media/profile_pictures/user42.jpg",
+  "wallet_balance": "50000.00",
+  "is_verified": true,
+  "created_at": "2025-11-01T10:00:00Z",
+  "stats": {
+    "tournaments_played": 15,
+    "tournaments_won": 3,
+    "total_matches": 120,
+    "matches_won": 75,
+    "win_rate": 62.50,
+    "total_earnings": 500000.00,
+    "ranking": 12
+  }
+}
+```
+
+---
+
+#### ⚙️ آپدیت پروفایل
+```http
+PATCH /api/auth/profile/update/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "first_name": "علی",
+  "last_name": "رضایی",
+  "clash_royale_tag": "#XYZ789"
+}
+```
+
+---
+
+#### 🔄 Legacy Endpoints (سازگاری با نسخه قبل)
+
+این endpoint ها همچنان کار می‌کنند اما **توصیه نمی‌شود استفاده شوند**:
+
+```http
+POST /api/auth/register/   # ثبت‌نام قدیمی با username/password
+POST /api/auth/login/      # لاگین قدیمی با username/password
+```
+
+**⚠️ توجه:** برای کاربران جدید، فقط از فلوی OTP استفاده کنید.
 
 ### 🏆 Tournaments
 
