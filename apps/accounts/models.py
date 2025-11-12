@@ -11,14 +11,14 @@ class User(AbstractUser):
         message="شماره تلفن باید به فرمت 09123456789 باشد"
     )
     
-    email = models.EmailField('ایمیل', unique=True)
+    email = models.EmailField('ایمیل', unique=False, null=True, blank=True)
     phone_number = models.CharField(
         'شماره تماس',
         max_length=11,
         validators=[phone_regex],
         unique=True,
-        null=True,
-        blank=True
+        null=False,
+        blank=False
     )
     profile_picture = models.ImageField(
         'تصویر پروفایل',
